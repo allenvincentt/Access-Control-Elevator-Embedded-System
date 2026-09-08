@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" rx="150" fill="#B20A07"/>
+  <!-- Elevator -->
+  <g fill="none" stroke="#FFFFFF" stroke-width="38" stroke-linejoin="round">
+    <rect x="300" y="210" width="540" height="500" rx="42"/>
+    <path d="M570 250v430"/>
+  </g>
+  <!-- Elevator arrows -->
+  <g fill="none" stroke="#F5CF28" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M470 155l45-45 45 45"/>
+    <path d="M620 110l45 45 45-45"/>
+  </g>
+  <!-- Control panel -->
+  <rect x="835" y="355" width="85" height="175" rx="22" fill="#FFFFFF"/>
+  <g fill="#B20A07" stroke="#B20A07" stroke-width="8" stroke-linejoin="round">
+    <circle cx="877" cy="407" r="24"/>
+    <circle cx="877" cy="480" r="24"/>
+  </g>
+  <g fill="none" stroke="#F5CF28" stroke-width="12" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M867 412l10-10 10 10"/>
+    <path d="M867 475l10 10 10-10"/>
+  </g>
+  <!-- Security shield -->
+  <path d="M515 385 L850 500 V675 C850 790 745 875 515 950 C285 875 180 790 180 675 V500 Z"
+        fill="#B20A07" stroke="#F5CF28" stroke-width="24" stroke-linejoin="round"/>
+  <!-- Face scan -->
+  <g fill="none" stroke="#FFFFFF" stroke-width="17" stroke-linecap="round">
+    <path d="M515 475c-65 0-112 52-112 118v50c0 38 27 68 61 68h102c34 0 61-30 61-68v-50c0-66-47-118-112-118z"/>
+    <path d="M420 585v-35h35M610 585v-35h-35M420 650v35h35M610 650v35h-35"/>
+  </g>
+  <!-- Scan line -->
+  <path d="M350 625h330" stroke="#F5CF28" stroke-width="14" stroke-linecap="round"/>
+  <!-- QR accent -->
+  <g fill="#F5CF28">
+    <rect x="445" y="755" width="65" height="65"/>
+    <rect x="520" y="755" width="65" height="65"/>
+    <rect x="445" y="830" width="65" height="65"/>
+    <rect x="530" y="835" width="18" height="18"/>
+    <rect x="555" y="830" width="30" height="30"/>
+    <rect x="530" y="870" width="55" height="25"/>
+  </g>
+  <g fill="#B20A07">
+    <rect x="458" y="768" width="39" height="39"/>
+    <rect x="533" y="768" width="39" height="39"/>
+    <rect x="458" y="843" width="39" height="39"/>
+  </g>
+</svg>
