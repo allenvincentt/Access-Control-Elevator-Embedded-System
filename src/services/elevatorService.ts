@@ -91,12 +91,12 @@ async function request(path: string, init?: RequestInit): Promise<unknown> {
     if (error instanceof Error && error.name === 'AbortError') {
       throw new AppError(
         'ELEVATOR_TIMEOUT',
-        'The elevator controller did not answer. Check that it has joined this hotspot.',
+        'The elevator controller did not answer. Check that this phone is connected to the ElevatorTerminal Wi-Fi.',
       );
     }
     throw new AppError(
       'ELEVATOR_UNREACHABLE',
-      'The elevator controller could not be reached. Check that it has joined this hotspot.',
+      'The elevator controller could not be reached. Check that this phone is connected to the ElevatorTerminal Wi-Fi.',
     );
   } finally {
     clearTimeout(timer);

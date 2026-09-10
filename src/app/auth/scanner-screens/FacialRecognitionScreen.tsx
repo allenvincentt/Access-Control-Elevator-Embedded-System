@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, StyleSheet, Text, View } from 'react-native';
+import { AppState, Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -11,6 +11,7 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CameraView } from 'expo-camera';
 import { File } from 'expo-file-system';
+import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 
 import type { VerificationSession } from '@/app/auth/scanner-screens/ScannerFlow';
 import { useSnackbar } from '@/components/common/Snackbar';
@@ -29,10 +30,19 @@ import {
   FACE_PRESENCE_MESSAGES,
   FACE_TERMINAL_GATES,
   FACE_TERMINAL_ISSUE_MESSAGES,
+  FACE_TERMINAL_SUBJECT_RULES,
 } from '@/services/face/constants';
 import { warmUpFaceModel, type FaceModelState } from '@/services/face/embedder';
 import { captureFaceFromPhoto } from '@/services/face/pipeline';
-import { isSteady, readPresence, type PresenceReading } from '@/services/face/presence';
+import { readPresence } from '@/services/face/presence';
+import {
+  recordIssue,
+  recordOutcome,
+  recordPresence,
+  snapshotTelemetry,
+  type TelemetrySnapshot,
+} from '@/services/face/telemetry';
+import { PresenceTracker, type TrackedPresence } from '@/services/face/tracker';
 import { verifyFace } from '@/services/verificationService';
 import type { FloorKey } from '@/types/database';
 
@@ -68,6 +78,12 @@ type Halt = {
   autoExit: boolean;
 };
 
+type Frame = {
+  uri: string;
+  width: number;
+  height: number;
+};
+
 const LOCAL_MISS_LIMIT = 5;
 const IDEAL_BAND_END = Math.min(
   1,
@@ -85,20 +101,22 @@ export function FacialRecognitionScreen({
   const cameraRef = useRef<CameraView>(null);
   const mounted = useRef(true);
   const phaseRef = useRef<Phase>('starting');
-  const streak = useRef(0);
-  const lastReading = useRef<PresenceReading | null>(null);
+  const tracker = useRef(new PresenceTracker());
   const serverDenials = useRef(0);
   const localMisses = useRef(0);
   const needsReArm = useRef(false);
   const detectorMisses = useRef(0);
-  const pictureSize = useRef<string | null>(null);
+  const sizeResolved = useRef(false);
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const verifyRunner = useRef<() => Promise<void>>(async () => {});
 
   const [phase, setPhaseState] = useState<Phase>('starting');
   const [cameraReady, setCameraReady] = useState(false);
+  const [pictureSize, setPictureSize] = useState<string | null>(null);
   const [appActive, setAppActive] = useState(true);
-  const [presence, setPresence] = useState<PresenceReading | null>(null);
+  const [settled, setSettled] = useState(true);
+  const [presence, setPresence] = useState<TrackedPresence | null>(null);
   const [progress, setProgress] = useState(0);
   const [coaching, setCoaching] = useState<Coaching | null>(null);
   const [denial, setDenial] = useState<Denial | null>(null);
@@ -106,6 +124,8 @@ export function FacialRecognitionScreen({
   const [reArm, setReArm] = useState(false);
   const [panelHeight, setPanelHeight] = useState(0);
   const [model, setModel] = useState<FaceModelState | null>(null);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [diagnostics, setDiagnostics] = useState<TelemetrySnapshot | null>(null);
   const [secondsLeft, setSecondsLeft] = useState(() => remainingSeconds(session.expiresAt));
 
   const setPhase = useCallback((next: Phase) => {
@@ -122,9 +142,9 @@ export function FacialRecognitionScreen({
 
   const resumeWatching = useCallback(() => {
     if (!mounted.current) return;
-    streak.current = 0;
-    lastReading.current = null;
+    tracker.current.reset();
     setProgress(0);
+    setPresence(null);
     setCoaching(null);
     setDenial(null);
     setPhase('watching');
@@ -141,7 +161,7 @@ export function FacialRecognitionScreen({
   const stop = useCallback(
     (next: Halt) => {
       clearHold();
-      streak.current = 0;
+      tracker.current.reset();
       setProgress(0);
       setHalt(next);
       setPhase('halted');
@@ -177,10 +197,27 @@ export function FacialRecognitionScreen({
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
-      setAppActive(state === 'active');
+      const active = state === 'active';
+      setAppActive(active);
+      setSettled(!active);
+      if (settleTimer.current) clearTimeout(settleTimer.current);
+      if (!active) return;
+      tracker.current.reset();
+      settleTimer.current = setTimeout(() => {
+        if (mounted.current) setSettled(true);
+      }, FACE_PRESENCE.resumeSettleMs);
     });
-    return () => subscription.remove();
+    return () => {
+      subscription.remove();
+      if (settleTimer.current) clearTimeout(settleTimer.current);
+    };
   }, []);
+
+  useEffect(() => {
+    if (!diagnosticsOpen) return;
+    const timer = setInterval(() => setDiagnostics(snapshotTelemetry()), 1000);
+    return () => clearInterval(timer);
+  }, [diagnosticsOpen]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -199,7 +236,7 @@ export function FacialRecognitionScreen({
     return () => clearInterval(timer);
   }, [session.expiresAt, stop]);
 
-  const takeFrame = useCallback(async (quality: number) => {
+  const capturePhoto = useCallback(async (quality: number): Promise<Frame | null> => {
     const camera = cameraRef.current;
     if (!camera) return null;
     try {
@@ -208,13 +245,36 @@ export function FacialRecognitionScreen({
         skipProcessing: false,
         shutterSound: false,
         exif: false,
-        ...(pictureSize.current ? { pictureSize: pictureSize.current } : null),
       });
-      return photo?.uri && photo.width && photo.height ? photo : null;
+      return photo?.uri && photo.width && photo.height
+        ? { uri: photo.uri, width: photo.width, height: photo.height }
+        : null;
     } catch {
       return null;
     }
   }, []);
+
+  const takePollFrame = useCallback(async (): Promise<Frame | null> => {
+    const photo = await capturePhoto(FACE_PRESENCE.pollFrameQuality);
+    if (!photo) return null;
+    if (photo.width <= FACE_PRESENCE.pollFrameWidth) return photo;
+
+    try {
+      const context = ImageManipulator.manipulate(photo.uri);
+      context.resize({ width: FACE_PRESENCE.pollFrameWidth, height: null });
+      const rendered = await context.renderAsync();
+      const saved = await rendered.saveAsync({
+        format: SaveFormat.JPEG,
+        compress: FACE_PRESENCE.pollFrameQuality,
+      });
+      release(rendered);
+      release(context);
+      discard(photo.uri);
+      return { uri: saved.uri, width: saved.width, height: saved.height };
+    } catch {
+      return photo;
+    }
+  }, [capturePhoto]);
 
   const coach = useCallback(
     (caption: string, detail: string) => {
@@ -223,8 +283,7 @@ export function FacialRecognitionScreen({
         needsReArm.current = true;
         setReArm(true);
       }
-      streak.current = 0;
-      lastReading.current = null;
+      tracker.current.reset();
       setProgress(0);
       setCoaching({ caption, detail });
       setPhase('coaching');
@@ -238,22 +297,25 @@ export function FacialRecognitionScreen({
     setCoaching(null);
 
     try {
-      const frame = await takeFrame(0.85);
+      const frame = await capturePhoto(FACE_PRESENCE.captureFrameQuality);
       if (!mounted.current) return;
       if (!frame) {
+        recordOutcome('frameLost');
         coach('Camera hiccup', FACE_TERMINAL_ISSUE_MESSAGES.CaptureFailed);
         return;
       }
 
-      const outcome = await captureFaceFromPhoto(
-        { uri: frame.uri, width: frame.width, height: frame.height },
-        { gates: FACE_TERMINAL_GATES, messages: FACE_TERMINAL_ISSUE_MESSAGES },
-      );
+      const outcome = await captureFaceFromPhoto(frame, {
+        gates: FACE_TERMINAL_GATES,
+        rules: FACE_TERMINAL_SUBJECT_RULES,
+        messages: FACE_TERMINAL_ISSUE_MESSAGES,
+      });
       discard(frame.uri);
 
       if (!mounted.current) return;
 
       if (!outcome.ok) {
+        recordIssue(outcome.issue);
         coach(
           outcome.issue === 'MultipleFaces' ? 'One person at a time' : 'Almost — hold still',
           outcome.message,
@@ -276,6 +338,7 @@ export function FacialRecognitionScreen({
       if (!mounted.current) return;
 
       if (result.ok) {
+        recordOutcome('granted');
         clearHold();
         setPhase('granted');
         snackbar.show(`Identity confirmed — ${result.staff.full_name}`, { variant: 'success' });
@@ -284,6 +347,8 @@ export function FacialRecognitionScreen({
         }, FACE_PRESENCE.grantedHoldMs);
         return;
       }
+
+      recordOutcome('denied');
 
       if (result.reason === 'SessionExpired' || result.reason === 'TooManyAttempts') {
         stop({
@@ -310,28 +375,28 @@ export function FacialRecognitionScreen({
         setReArm(true);
       }
 
-      streak.current = 0;
-      lastReading.current = null;
+      tracker.current.reset();
       setProgress(0);
       setDenial({ message: DENIAL_MESSAGES[result.reason], attemptsLeft });
       setPhase('denied');
       holdThenResume(FACE_PRESENCE.deniedHoldMs);
     } catch (error) {
       if (!mounted.current) return;
+      recordOutcome('error');
       const message = errorMessage(error, 'Face verification failed.');
       serverDenials.current += 1;
       if (serverDenials.current >= FACE_PRESENCE.autoAttemptLimit) {
         needsReArm.current = true;
         setReArm(true);
       }
-      streak.current = 0;
-      lastReading.current = null;
+      tracker.current.reset();
       setProgress(0);
       setDenial({ message, attemptsLeft: null });
       setPhase('denied');
       holdThenResume(FACE_PRESENCE.deniedHoldMs);
     }
   }, [
+    capturePhoto,
     clearHold,
     coach,
     holdThenResume,
@@ -340,7 +405,6 @@ export function FacialRecognitionScreen({
     setPhase,
     snackbar,
     stop,
-    takeFrame,
   ]);
 
   useEffect(() => {
@@ -348,16 +412,21 @@ export function FacialRecognitionScreen({
   }, [runVerification]);
 
   const handleCameraReady = useCallback(async () => {
-    try {
-      const sizes = await cameraRef.current?.getAvailablePictureSizesAsync();
-      pictureSize.current = sizes ? choosePictureSize(sizes) : null;
-    } catch {
-      pictureSize.current = null;
+    if (!sizeResolved.current) {
+      sizeResolved.current = true;
+      try {
+        const sizes = await cameraRef.current?.getAvailablePictureSizesAsync();
+        const chosen = sizes ? choosePictureSize(sizes) : null;
+        if (mounted.current && chosen) setPictureSize(chosen);
+      } catch {
+        sizeResolved.current = true;
+      }
     }
     if (mounted.current) setCameraReady(true);
   }, []);
 
-  const monitoring = cameraReady && appActive && phase !== 'halted' && model?.ready === true;
+  const monitoring =
+    cameraReady && appActive && settled && phase !== 'halted' && model?.ready === true;
 
   useEffect(() => {
     if (!monitoring) return;
@@ -377,24 +446,23 @@ export function FacialRecognitionScreen({
           continue;
         }
 
-        const frame = await takeFrame(0.5);
+        const frame = await takePollFrame();
         if (cancelled) break;
 
         if (!frame) {
+          recordOutcome('frameLost');
           await wait(FACE_PRESENCE.lostPersonPollMs);
           continue;
         }
 
-        const reading = await readPresence(frame.uri, frame.width, frame.height);
+        const sample = await readPresence(frame.uri, frame.width, frame.height);
         discard(frame.uri);
         if (cancelled || phaseRef.current !== 'watching') continue;
 
-        const previous = lastReading.current;
-        lastReading.current = reading;
-
-        if (reading.code === 'DetectorUnavailable') {
+        if (sample.detectorFailed) {
           detectorMisses.current += 1;
-          if (detectorMisses.current >= 3) {
+          recordPresence('DetectorUnavailable');
+          if (detectorMisses.current >= FACE_PRESENCE.detectorFailureLimit) {
             stop({
               title: 'Face detection unavailable',
               body: FACE_PRESENCE_MESSAGES.DetectorUnavailable.detail,
@@ -402,37 +470,32 @@ export function FacialRecognitionScreen({
             });
             break;
           }
-        } else {
-          detectorMisses.current = 0;
+          await wait(FACE_PRESENCE.lostPersonPollMs);
+          continue;
         }
 
-        if (needsReArm.current && (reading.code === 'NoPerson' || reading.code === 'TooFar')) {
+        detectorMisses.current = 0;
+
+        const tracked = tracker.current.push(sample);
+        recordPresence(tracked.code);
+
+        if (needsReArm.current && (!tracked.present || tracked.code === 'TooFar')) {
           needsReArm.current = false;
           serverDenials.current = 0;
           localMisses.current = 0;
           setReArm(false);
         }
 
-        if (reading.code === 'NoPerson' || reading.code === 'Crowded') {
-          streak.current = 0;
-        } else if (reading.ready) {
-          streak.current = isSteady(previous, reading)
-            ? Math.min(FACE_PRESENCE.readyStreakTarget, streak.current + 1)
-            : Math.max(streak.current, 1);
-        } else {
-          streak.current = Math.max(0, streak.current - 1);
-        }
+        setPresence(tracked);
+        setProgress(tracked.progress);
 
-        setPresence(reading);
-        setProgress(streak.current / FACE_PRESENCE.readyStreakTarget);
-
-        if (streak.current >= FACE_PRESENCE.readyStreakTarget && !needsReArm.current) {
+        if (tracked.ready && !needsReArm.current) {
           await verifyRunner.current();
           continue;
         }
 
         await wait(
-          reading.nearCount > 0 ? FACE_PRESENCE.pollIntervalMs : FACE_PRESENCE.lostPersonPollMs,
+          tracked.present ? FACE_PRESENCE.pollIntervalMs : FACE_PRESENCE.lostPersonPollMs,
         );
       }
     };
@@ -443,7 +506,7 @@ export function FacialRecognitionScreen({
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [monitoring, stop, takeFrame]);
+  }, [monitoring, stop, takePollFrame]);
 
   const view = useMemo(
     () => describe({ phase, presence, coaching, denial, halt, reArm }),
@@ -477,6 +540,7 @@ export function FacialRecognitionScreen({
               facing="front"
               active={appActive}
               animateShutter={false}
+              pictureSize={pictureSize ?? undefined}
               onCameraReady={() => void handleCameraReady()}
             />
             <FaceAperture
@@ -532,13 +596,22 @@ export function FacialRecognitionScreen({
             </>
           ) : (
             <>
-              <View style={styles.head}>
+              <Pressable
+                style={styles.head}
+                delayLongPress={1500}
+                onLongPress={() => {
+                  setDiagnostics(snapshotTelemetry());
+                  setDiagnosticsOpen((open) => !open);
+                }}
+              >
                 <LiveDot color={view.dot} pulsing={phase === 'watching'} />
                 <Text style={styles.title}>{view.panelTitle}</Text>
                 <Text style={styles.clock}>{expired ? 'expired' : `${secondsLeft}s`}</Text>
-              </View>
+              </Pressable>
 
-              {presence && presence.nearCount > 0 ? (
+              {diagnosticsOpen ? (
+                <Diagnostics snapshot={diagnostics} presence={presence} />
+              ) : presence?.present ? (
                 <View style={styles.meter}>
                   <View style={styles.track}>
                     <View
@@ -590,7 +663,7 @@ function describe({
   reArm,
 }: {
   phase: Phase;
-  presence: PresenceReading | null;
+  presence: TrackedPresence | null;
   coaching: Coaching | null;
   denial: Denial | null;
   halt: Halt | null;
@@ -713,6 +786,52 @@ function describe({
   };
 }
 
+function Diagnostics({
+  snapshot,
+  presence,
+}: {
+  snapshot: TelemetrySnapshot | null;
+  presence: TrackedPresence | null;
+}) {
+  if (!snapshot) {
+    return <Text style={styles.meta}>Collecting diagnostics…</Text>;
+  }
+
+  const minutes = Math.round(snapshot.windowMs / 60000);
+
+  return (
+    <View style={styles.diagnostics}>
+      <Text style={styles.meta}>
+        Last {minutes} min · {snapshot.total} event{snapshot.total === 1 ? '' : 's'}
+      </Text>
+      <Text style={styles.diagnosticLine}>
+        {presence
+          ? `w ${presence.widthRatio.toFixed(3)} · q ${presence.geometryScore.toFixed(2)} · n ${presence.samples} · ${presence.steady ? 'steady' : 'moving'}`
+          : 'no track'}
+      </Text>
+      <DiagnosticRow label="presence" tallies={snapshot.presence} />
+      <DiagnosticRow label="rejects" tallies={snapshot.issues} />
+      <DiagnosticRow label="results" tallies={snapshot.outcomes} />
+    </View>
+  );
+}
+
+function DiagnosticRow({
+  label,
+  tallies,
+}: {
+  label: string;
+  tallies: TelemetrySnapshot['presence'];
+}) {
+  if (!tallies.length) return null;
+
+  return (
+    <Text style={styles.diagnosticLine} numberOfLines={2}>
+      {label}: {tallies.map((row) => `${row.key} ${row.count}`).join(' · ')}
+    </Text>
+  );
+}
+
 function LiveDot({ color, pulsing }: { color: string; pulsing: boolean }) {
   const beat = useSharedValue(0);
 
@@ -773,6 +892,14 @@ function choosePictureSize(sizes: string[]) {
   );
 }
 
+function release(target: { release: () => void }) {
+  try {
+    target.release();
+  } catch {
+    return;
+  }
+}
+
 function discard(uri: string) {
   if (!uri.startsWith('file:')) return;
   try {
@@ -819,6 +946,14 @@ const styles = StyleSheet.create({
   meta: {
     color: colors.textMuted,
     ...typography.caption,
+  },
+  diagnostics: {
+    gap: spacing.xs,
+  },
+  diagnosticLine: {
+    color: colors.textSecondary,
+    ...typography.caption,
+    fontVariant: ['tabular-nums'],
   },
   meter: {
     flexDirection: 'row',

@@ -4,11 +4,13 @@ import { decode as decodeJpeg } from 'jpeg-js';
 
 import { AppError } from '@/lib/errors';
 import {
+  FACE_ENROLLMENT_SUBJECT_RULES,
   FACE_INPUT_SIZE,
   FACE_ISSUE_MESSAGES,
   FACE_QUALITY_GATES,
   type FaceQualityGates,
   type FaceQualityIssue,
+  type FaceSubjectRules,
 } from '@/services/face/constants';
 import { detectSingleFace, faceCropRect } from '@/services/face/detector';
 import { computeEmbedding } from '@/services/face/embedder';
@@ -32,12 +34,17 @@ export type FaceCaptureOutcome =
 
 export type FaceCaptureOptions = {
   gates?: FaceQualityGates;
+  rules?: FaceSubjectRules;
   messages?: Record<FaceQualityIssue, string>;
 };
 
 export async function captureFaceFromPhoto(
   photo: CapturedPhoto,
-  { gates = FACE_QUALITY_GATES, messages = FACE_ISSUE_MESSAGES }: FaceCaptureOptions = {},
+  {
+    gates = FACE_QUALITY_GATES,
+    rules = FACE_ENROLLMENT_SUBJECT_RULES,
+    messages = FACE_ISSUE_MESSAGES,
+  }: FaceCaptureOptions = {},
 ): Promise<FaceCaptureOutcome> {
   const fail = (issue: FaceQualityIssue): FaceCaptureOutcome => ({
     ok: false,
@@ -49,7 +56,7 @@ export async function captureFaceFromPhoto(
     return fail('CaptureFailed');
   }
 
-  const detection = await detectSingleFace(photo.uri, photo.width, photo.height, gates);
+  const detection = await detectSingleFace(photo.uri, photo.width, photo.height, gates, rules);
   if (!detection.ok) {
     return fail(detection.issue);
   }
@@ -70,6 +77,8 @@ export async function captureFaceFromPhoto(
       compress: 1,
       base64: true,
     });
+    release(rendered);
+    release(context);
     if (!saved.base64) {
       return fail('CaptureFailed');
     }
@@ -168,6 +177,14 @@ function analysePixels(rgba: Uint8Array, size: number): ImageStatistics {
   );
 
   return { meanLuma, lumaSpread, sharpness };
+}
+
+function release(target: { release: () => void }) {
+  try {
+    target.release();
+  } catch {
+    return;
+  }
 }
 
 function clamp01(value: number) {

@@ -15,11 +15,16 @@ import {
   ENROLLMENT_SAMPLE_COUNT,
   FACE_MODEL_FAILURE_MESSAGES,
 } from '@/services/face/constants';
-import { cosineSimilarity, warmUpFaceModel, type FaceModelState } from '@/services/face/embedder';
+import {
+  cosineSimilarity,
+  meanEmbedding,
+  warmUpFaceModel,
+  type FaceModelState,
+} from '@/services/face/embedder';
 import { captureFaceFromPhoto, type FaceCapture } from '@/services/face/pipeline';
 import type { FaceSamplePayload } from '@/types/database';
 
-const CONSISTENCY_MIN = 0.7;
+const CONSISTENCY_MIN = 0.62;
 
 export type FaceEnrollmentResult = {
   samples: FaceSamplePayload[];
@@ -95,16 +100,16 @@ export function FaceEnrollmentScreen({
         return;
       }
 
-      const mismatched = captures.find(
-        (existing) => cosineSimilarity(existing.embedding, outcome.capture.embedding) < CONSISTENCY_MIN,
-      );
+      const template = meanEmbedding(captures.map((existing) => existing.embedding));
+      const similarity = template
+        ? cosineSimilarity(template, outcome.capture.embedding)
+        : 1;
 
-      if (mismatched) {
+      if (similarity < CONSISTENCY_MIN) {
         setStatus('error');
         setIssue(
-          'That capture did not match the earlier ones. Make sure the same person stays in frame, then start over.',
+          `That capture did not match the earlier ones (${similarity.toFixed(2)}). Make sure the same person is in frame and try again — the captures already accepted are kept.`,
         );
-        setCaptures([]);
         return;
       }
 

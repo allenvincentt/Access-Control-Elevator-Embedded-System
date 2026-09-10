@@ -41,4 +41,4 @@ export const IS_ELEVATOR_CONFIGURED =
   ELEVATOR_BASE_URL.length > 0 && ELEVATOR_DEVICE_KEY.length > 0;
 export const ELEVATOR_CONFIG_ERROR = IS_ELEVATOR_CONFIGURED
   ? null
-  : 'EXPO_PUBLIC_ELEVATOR_URL and EXPO_PUBLIC_ELEVATOR_KEY are not set. Point them at the ESP32 on your hotspot, then restart with "npx expo start --clear".';
+  : 'EXPO_PUBLIC_ELEVATOR_URL and EXPO_PUBLIC_ELEVATOR_KEY are not set. Set the URL to http://192.168.4.1, then restart with "npx expo start --clear".';

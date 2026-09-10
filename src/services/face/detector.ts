@@ -1,10 +1,13 @@
 import FaceDetection, { type Face } from '@react-native-ml-kit/face-detection';
 
 import {
+  FACE_ENROLLMENT_SUBJECT_RULES,
   FACE_QUALITY_GATES,
   type FaceQualityGates,
   type FaceQualityIssue,
+  type FaceSubjectRules,
 } from '@/services/face/constants';
+import { selectSubject, type FaceCandidate } from '@/services/face/subject';
 
 export type DetectedFace = {
   face: Face;
@@ -19,25 +22,33 @@ export type FaceGeometry = {
   widthRatio: number;
   offsetX: number;
   offsetY: number;
-  centreOffset: number;
   yaw: number;
   pitch: number;
   roll: number;
   score: number;
 };
 
+export type GeometryGates = {
+  idealFaceWidthRatio: number;
+  maxFaceWidthRatio: number;
+  maxCenterOffsetXRatio: number;
+  maxCenterOffsetYRatio: number;
+  maxYawDegrees: number;
+  maxPitchDegrees: number;
+  maxRollDegrees: number;
+};
+
 export type DetectFacesOptions = {
   minFaceSize: number;
-  accurate: boolean;
 };
 
 export async function detectFaces(
   imageUri: string,
-  { minFaceSize, accurate }: DetectFacesOptions,
+  { minFaceSize }: DetectFacesOptions,
 ): Promise<Face[] | null> {
   try {
     return await FaceDetection.detect(imageUri, {
-      performanceMode: accurate ? 'accurate' : 'fast',
+      performanceMode: 'accurate',
       landmarkMode: 'none',
       contourMode: 'none',
       classificationMode: 'all',
@@ -48,44 +59,19 @@ export async function detectFaces(
   }
 }
 
-export function faceWidthRatio(face: Face, imageWidth: number) {
-  return imageWidth > 0 ? face.frame.width / imageWidth : 0;
-}
-
-export function nearFieldFaces(faces: Face[], imageWidth: number, minWidthRatio: number) {
-  return faces.filter((face) => faceWidthRatio(face, imageWidth) >= minWidthRatio);
-}
-
-export function measureFace(
-  face: Face,
-  imageWidth: number,
-  imageHeight: number,
-  gates: {
-    idealFaceWidthRatio: number;
-    maxFaceWidthRatio: number;
-    maxCenterOffsetRatio: number;
-    maxYawDegrees: number;
-    maxPitchDegrees: number;
-    maxRollDegrees: number;
-  },
-): FaceGeometry {
-  const { frame } = face;
-  const widthRatio = faceWidthRatio(face, imageWidth);
-
-  const centreX = frame.left + frame.width / 2;
-  const centreY = frame.top + frame.height / 2;
-  const offsetX = Math.abs(centreX - imageWidth / 2) / imageWidth;
-  const offsetY = Math.abs(centreY - imageHeight / 2) / imageHeight;
-  const centreOffset = Math.max(offsetX, offsetY);
-
-  const yaw = Math.abs(face.rotationY ?? 0);
-  const pitch = Math.abs(face.rotationX ?? 0);
-  const roll = Math.abs(face.rotationZ ?? 0);
+export function scoreGeometry(candidate: FaceCandidate, gates: GeometryGates): FaceGeometry {
+  const { widthRatio, offsetX, offsetY, yaw, pitch, roll } = candidate;
 
   const posePenalty =
     (yaw / gates.maxYawDegrees + pitch / gates.maxPitchDegrees + roll / gates.maxRollDegrees) / 3;
   const poseScore = clamp01(1 - posePenalty);
-  const framingScore = clamp01(1 - 0.7 * (centreOffset / gates.maxCenterOffsetRatio));
+
+  const framing = Math.max(
+    offsetX / gates.maxCenterOffsetXRatio,
+    offsetY / gates.maxCenterOffsetYRatio,
+  );
+  const framingScore = clamp01(1 - 0.7 * framing);
+
   const sizeScore =
     widthRatio <= gates.idealFaceWidthRatio
       ? clamp01(widthRatio / gates.idealFaceWidthRatio)
@@ -100,7 +86,6 @@ export function measureFace(
     widthRatio,
     offsetX,
     offsetY,
-    centreOffset,
     yaw,
     pitch,
     roll,
@@ -113,11 +98,9 @@ export async function detectSingleFace(
   imageWidth: number,
   imageHeight: number,
   gates: FaceQualityGates = FACE_QUALITY_GATES,
+  rules: FaceSubjectRules = FACE_ENROLLMENT_SUBJECT_RULES,
 ): Promise<DetectionOutcome> {
-  const faces = await detectFaces(imageUri, {
-    minFaceSize: gates.detectorMinFaceSize,
-    accurate: true,
-  });
+  const faces = await detectFaces(imageUri, { minFaceSize: gates.detectorMinFaceSize });
 
   if (faces === null) {
     return { ok: false, issue: 'ModelUnavailable' };
@@ -126,17 +109,17 @@ export async function detectSingleFace(
     return { ok: false, issue: 'NoFaceDetected' };
   }
 
-  const nearField = nearFieldFaces(faces, imageWidth, gates.bystanderMinWidthRatio);
+  const selection = selectSubject(faces, imageWidth, imageHeight, rules, gates.minEyeOpenProbability);
+  const subject = selection.subject;
 
-  if (nearField.length === 0) {
-    return { ok: false, issue: 'FaceTooSmall' };
+  if (!subject) {
+    return { ok: false, issue: selection.outsideRoi > 0 ? 'FaceOffCentre' : 'NoFaceDetected' };
   }
-  if (nearField.length > 1) {
+  if (selection.bystanders > 0) {
     return { ok: false, issue: 'MultipleFaces' };
   }
 
-  const face = nearField[0];
-  const geometry = measureFace(face, imageWidth, imageHeight, gates);
+  const geometry = scoreGeometry(subject, gates);
 
   if (geometry.widthRatio < gates.minFaceWidthRatio) {
     return { ok: false, issue: 'FaceTooSmall' };
@@ -144,7 +127,10 @@ export async function detectSingleFace(
   if (geometry.widthRatio > gates.maxFaceWidthRatio) {
     return { ok: false, issue: 'FaceTooClose' };
   }
-  if (geometry.centreOffset > gates.maxCenterOffsetRatio) {
+  if (
+    geometry.offsetX > gates.maxCenterOffsetXRatio ||
+    geometry.offsetY > gates.maxCenterOffsetYRatio
+  ) {
     return { ok: false, issue: 'FaceOffCentre' };
   }
   if (geometry.yaw > gates.maxYawDegrees || geometry.pitch > gates.maxPitchDegrees) {
@@ -153,18 +139,11 @@ export async function detectSingleFace(
   if (geometry.roll > gates.maxRollDegrees) {
     return { ok: false, issue: 'HeadTilted' };
   }
-
-  const leftEye = face.leftEyeOpenProbability;
-  const rightEye = face.rightEyeOpenProbability;
-  if (
-    typeof leftEye === 'number' &&
-    typeof rightEye === 'number' &&
-    (leftEye < gates.minEyeOpenProbability || rightEye < gates.minEyeOpenProbability)
-  ) {
+  if (subject.eyesOpen === false) {
     return { ok: false, issue: 'EyesClosed' };
   }
 
-  return { ok: true, detected: { face, geometryScore: geometry.score } };
+  return { ok: true, detected: { face: subject.face, geometryScore: geometry.score } };
 }
 
 export function faceCropRect(

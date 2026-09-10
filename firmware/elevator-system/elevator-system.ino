@@ -1,10 +1,11 @@
 #include <WiFi.h>
 #include <WebServer.h>
-#include <ESPmDNS.h>
 
-static const char *WIFI_SSID = "InfinixAllen";
-static const char *WIFI_PASSWORD = "123@infi";
-static const char *MDNS_HOSTNAME = "elevator";
+static const char *AP_SSID = "ElevatorTerminal";
+static const char *AP_PASSWORD = "elevator123";
+static const IPAddress AP_IP(192, 168, 4, 1);
+static const IPAddress AP_GATEWAY(192, 168, 4, 1);
+static const IPAddress AP_SUBNET(255, 255, 255, 0);
 static const char *DEVICE_KEY = "Elevator123";
 
 static const uint8_t PIN_BUTTON_FLOOR[3] = {32, 33, 25};
@@ -16,7 +17,6 @@ static const char *FLOOR_KEY[3] = {"MainLobby", "SecondFloor", "ThirdFloor"};
 static const uint32_t DOOR_OPEN_WINDOW_MS = 30000;
 static const uint32_t TRAVEL_MS = 1000;
 static const uint32_t DEBOUNCE_MS = 30;
-static const uint32_t WIFI_RETRY_MS = 5000;
 
 enum ElevatorState {
   STATE_IDLE,
@@ -34,7 +34,6 @@ static char selectedKey[16] = "";
 static const char *sessionResult = "none";
 static uint32_t doorOpenedAt = 0;
 static uint32_t travelStartedAt = 0;
-static uint32_t wifiRetryAt = 0;
 
 static bool buttonStableHigh[3] = {true, true, true};
 static bool buttonLastReadHigh[3] = {true, true, true};
@@ -327,49 +326,22 @@ static void serviceStateMachine() {
   }
 }
 
-static void serviceWifi() {
-  if (WiFi.status() == WL_CONNECTED) {
-    return;
-  }
-  uint32_t now = millis();
-  if (now - wifiRetryAt < WIFI_RETRY_MS) {
-    return;
-  }
-  wifiRetryAt = now;
-  Serial.println("[wifi] reconnecting to hotspot");
-  WiFi.disconnect();
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-}
-
-static void connectWifi() {
-  WiFi.mode(WIFI_STA);
+static void startAccessPoint() {
+  WiFi.mode(WIFI_AP);
   WiFi.setSleep(false);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.softAPConfig(AP_IP, AP_GATEWAY, AP_SUBNET);
 
-  Serial.print("[wifi] joining ");
-  Serial.println(WIFI_SSID);
-
-  uint32_t startedAt = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - startedAt < 20000) {
-    delay(250);
-    Serial.print('.');
-  }
-  Serial.println();
-
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[wifi] not connected yet, will keep retrying in loop");
+  bool started = WiFi.softAP(AP_SSID, AP_PASSWORD);
+  if (!started) {
+    Serial.println("[wifi] access point failed to start");
     return;
   }
 
-  Serial.print("[wifi] connected, terminal URL: http://");
-  Serial.println(WiFi.localIP());
-
-  if (MDNS.begin(MDNS_HOSTNAME)) {
-    MDNS.addService("http", "tcp", 80);
-    Serial.print("[mdns] also reachable at http://");
-    Serial.print(MDNS_HOSTNAME);
-    Serial.println(".local");
-  }
+  Serial.print("[wifi] access point \"");
+  Serial.print(AP_SSID);
+  Serial.println("\" is up");
+  Serial.print("[wifi] terminal URL: http://");
+  Serial.println(WiFi.softAPIP());
 }
 
 void setup() {
@@ -391,7 +363,7 @@ void setup() {
   enterIdle();
   Serial.println("[boot] idle at MainLobby, door closed, buttons disarmed");
 
-  connectWifi();
+  startAccessPoint();
 
   server.collectHeaders(COLLECTED_HEADERS, 1);
   server.on("/status", HTTP_GET, handleStatus);
@@ -408,7 +380,6 @@ void setup() {
 }
 
 void loop() {
-  serviceWifi();
   server.handleClient();
   pollButtons();
   serviceStateMachine();

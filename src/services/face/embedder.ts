@@ -162,3 +162,31 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   }
   return dot;
 }
+
+export function meanEmbedding(embeddings: number[][]): number[] | null {
+  if (!embeddings.length) return null;
+
+  const size = embeddings[0].length;
+  const total = new Array<number>(size).fill(0);
+
+  for (const embedding of embeddings) {
+    if (embedding.length !== size) return null;
+    for (let index = 0; index < size; index += 1) {
+      total[index] += embedding[index];
+    }
+  }
+
+  let sumOfSquares = 0;
+  for (let index = 0; index < size; index += 1) {
+    total[index] /= embeddings.length;
+    sumOfSquares += total[index] * total[index];
+  }
+
+  const norm = Math.sqrt(sumOfSquares);
+  if (!Number.isFinite(norm) || norm < 1e-6) return null;
+
+  for (let index = 0; index < size; index += 1) {
+    total[index] /= norm;
+  }
+  return total;
+}

@@ -9,7 +9,8 @@ export type FaceQualityGates = {
   minFaceWidthRatio: number;
   idealFaceWidthRatio: number;
   maxFaceWidthRatio: number;
-  maxCenterOffsetRatio: number;
+  maxCenterOffsetXRatio: number;
+  maxCenterOffsetYRatio: number;
   maxYawDegrees: number;
   maxPitchDegrees: number;
   maxRollDegrees: number;
@@ -22,13 +23,32 @@ export type FaceQualityGates = {
   cropMarginRatio: number;
 };
 
+export type FaceSubjectRules = {
+  duplicateIouThreshold: number;
+  duplicateCentreRatio: number;
+  minAspect: number;
+  maxAspect: number;
+  maxCandidateYaw: number;
+  maxCandidatePitch: number;
+  edgeMarginRatio: number;
+  edgeOffsetTolerance: number;
+  roiMaxOffsetX: number;
+  roiMaxOffsetY: number;
+  idealWidthRatio: number;
+  unclassifiedPenalty: number;
+  crowdRelativeSize: number;
+  crowdMinWidthRatio: number;
+  crowdMinSeparation: number;
+};
+
 export const FACE_QUALITY_GATES: FaceQualityGates = {
   detectorMinFaceSize: 0.15,
-  bystanderMinWidthRatio: 0,
+  bystanderMinWidthRatio: 0.12,
   minFaceWidthRatio: 0.18,
   idealFaceWidthRatio: 0.45,
   maxFaceWidthRatio: 0.9,
-  maxCenterOffsetRatio: 0.28,
+  maxCenterOffsetXRatio: 0.24,
+  maxCenterOffsetYRatio: 0.28,
   maxYawDegrees: 16,
   maxPitchDegrees: 16,
   maxRollDegrees: 12,
@@ -41,13 +61,32 @@ export const FACE_QUALITY_GATES: FaceQualityGates = {
   cropMarginRatio: 0.28,
 };
 
+export const FACE_ENROLLMENT_SUBJECT_RULES: FaceSubjectRules = {
+  duplicateIouThreshold: 0.5,
+  duplicateCentreRatio: 0.5,
+  minAspect: 0.6,
+  maxAspect: 1.05,
+  maxCandidateYaw: 35,
+  maxCandidatePitch: 35,
+  edgeMarginRatio: 0.012,
+  edgeOffsetTolerance: 0.2,
+  roiMaxOffsetX: 0.34,
+  roiMaxOffsetY: 0.38,
+  idealWidthRatio: FACE_QUALITY_GATES.idealFaceWidthRatio,
+  unclassifiedPenalty: 0.45,
+  crowdRelativeSize: 0.6,
+  crowdMinWidthRatio: FACE_QUALITY_GATES.bystanderMinWidthRatio,
+  crowdMinSeparation: 0.18,
+};
+
 export const FACE_TERMINAL_GATES: FaceQualityGates = {
-  detectorMinFaceSize: 0.06,
-  bystanderMinWidthRatio: 0.085,
+  detectorMinFaceSize: 0.1,
+  bystanderMinWidthRatio: 0.12,
   minFaceWidthRatio: 0.11,
   idealFaceWidthRatio: 0.22,
   maxFaceWidthRatio: 0.6,
-  maxCenterOffsetRatio: 0.3,
+  maxCenterOffsetXRatio: 0.26,
+  maxCenterOffsetYRatio: 0.3,
   maxYawDegrees: 30,
   maxPitchDegrees: 28,
   maxRollDegrees: 26,
@@ -60,28 +99,77 @@ export const FACE_TERMINAL_GATES: FaceQualityGates = {
   cropMarginRatio: 0.3,
 };
 
+export const FACE_TERMINAL_SUBJECT_RULES: FaceSubjectRules = {
+  duplicateIouThreshold: 0.5,
+  duplicateCentreRatio: 0.5,
+  minAspect: 0.6,
+  maxAspect: 1.05,
+  maxCandidateYaw: 35,
+  maxCandidatePitch: 35,
+  edgeMarginRatio: 0.012,
+  edgeOffsetTolerance: 0.2,
+  roiMaxOffsetX: 0.34,
+  roiMaxOffsetY: 0.38,
+  idealWidthRatio: FACE_TERMINAL_GATES.idealFaceWidthRatio,
+  unclassifiedPenalty: 0.45,
+  crowdRelativeSize: 0.6,
+  crowdMinWidthRatio: FACE_TERMINAL_GATES.bystanderMinWidthRatio,
+  crowdMinSeparation: 0.18,
+};
+
+export type FacePresenceRules = {
+  detectorMinFaceSize: number;
+  minWidthRatio: number;
+  idealWidthRatio: number;
+  maxWidthRatio: number;
+  maxOffsetXRatio: number;
+  maxOffsetYRatio: number;
+  maxYawDegrees: number;
+  maxPitchDegrees: number;
+  maxRollDegrees: number;
+  minEyeOpenProbability: number;
+  readyEnterScore: number;
+  readyExitScore: number;
+};
+
 export const FACE_PRESENCE = {
-  detectorMinFaceSize: FACE_TERMINAL_GATES.detectorMinFaceSize,
-  bystanderMinWidthRatio: FACE_TERMINAL_GATES.bystanderMinWidthRatio,
+  detectorMinFaceSize: 0.11,
   minWidthRatio: 0.13,
   idealWidthRatio: FACE_TERMINAL_GATES.idealFaceWidthRatio,
   maxWidthRatio: 0.5,
-  maxOffsetXRatio: 0.24,
-  maxOffsetYRatio: 0.24,
+  maxOffsetXRatio: 0.22,
+  maxOffsetYRatio: 0.26,
   maxYawDegrees: 26,
   maxPitchDegrees: 24,
   maxRollDegrees: 22,
   minEyeOpenProbability: 0.3,
-  minGeometryScore: 0.62,
-  steadyCentreDelta: 0.055,
-  steadyScaleDelta: 0.22,
-  readyStreakTarget: 3,
+  readyEnterScore: 0.62,
+  readyExitScore: 0.48,
   pollIntervalMs: 220,
   lostPersonPollMs: 500,
   deniedHoldMs: 3200,
   guidanceHoldMs: 1500,
   grantedHoldMs: 900,
   autoAttemptLimit: 3,
+  pollFrameWidth: 640,
+  pollFrameQuality: 0.55,
+  captureFrameQuality: 0.85,
+  detectorFailureLimit: 6,
+  resumeSettleMs: 450,
+} as const;
+
+export const FACE_TRACKING = {
+  windowSize: 5,
+  readyTarget: 3,
+  crowdTarget: 3,
+  absentTarget: 3,
+  associationMaxDistance: 0.15,
+  adoptionFrames: 2,
+  minSteadySamples: 3,
+  steadyCentreDelta: 0.055,
+  steadyScaleDelta: 0.15,
+  rawCentreDelta: 0.09,
+  rawScaleDelta: 0.3,
 } as const;
 
 export type PresenceCode =

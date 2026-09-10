@@ -1,163 +1,101 @@
-import { FACE_PRESENCE, type PresenceCode } from '@/services/face/constants';
-import { detectFaces, faceWidthRatio, measureFace, nearFieldFaces } from '@/services/face/detector';
+import { FACE_PRESENCE, FACE_TERMINAL_SUBJECT_RULES } from '@/services/face/constants';
+import { detectFaces, scoreGeometry, type GeometryGates } from '@/services/face/detector';
+import { selectSubject } from '@/services/face/subject';
 
-export type PresenceReading = {
-  code: PresenceCode;
-  ready: boolean;
-  faceCount: number;
-  nearCount: number;
+export type PresenceSample = {
+  detectorFailed: boolean;
+  present: boolean;
+  crowded: boolean;
   widthRatio: number;
   centreX: number;
   centreY: number;
-  proximity: number;
-  alignment: number;
+  offsetX: number;
+  offsetY: number;
+  yaw: number;
+  pitch: number;
+  roll: number;
   geometryScore: number;
+  eyesOpen: boolean | null;
+  detectedCount: number;
+  bystanders: number;
 };
 
-const EMPTY: PresenceReading = {
-  code: 'NoPerson',
-  ready: false,
-  faceCount: 0,
-  nearCount: 0,
+const PRESENCE_GEOMETRY: GeometryGates = {
+  idealFaceWidthRatio: FACE_PRESENCE.idealWidthRatio,
+  maxFaceWidthRatio: FACE_PRESENCE.maxWidthRatio,
+  maxCenterOffsetXRatio: FACE_PRESENCE.maxOffsetXRatio,
+  maxCenterOffsetYRatio: FACE_PRESENCE.maxOffsetYRatio,
+  maxYawDegrees: FACE_PRESENCE.maxYawDegrees,
+  maxPitchDegrees: FACE_PRESENCE.maxPitchDegrees,
+  maxRollDegrees: FACE_PRESENCE.maxRollDegrees,
+};
+
+const EMPTY: PresenceSample = {
+  detectorFailed: false,
+  present: false,
+  crowded: false,
   widthRatio: 0,
   centreX: 0.5,
   centreY: 0.5,
-  proximity: 0,
-  alignment: 0,
+  offsetX: 0,
+  offsetY: 0,
+  yaw: 0,
+  pitch: 0,
+  roll: 0,
   geometryScore: 0,
+  eyesOpen: null,
+  detectedCount: 0,
+  bystanders: 0,
 };
 
 export async function readPresence(
   imageUri: string,
   imageWidth: number,
   imageHeight: number,
-): Promise<PresenceReading> {
+): Promise<PresenceSample> {
   if (!imageUri || !imageWidth || !imageHeight) {
-    return EMPTY;
+    return { ...EMPTY, detectorFailed: true };
   }
 
-  const faces = await detectFaces(imageUri, {
-    minFaceSize: FACE_PRESENCE.detectorMinFaceSize,
-    accurate: false,
-  });
+  const faces = await detectFaces(imageUri, { minFaceSize: FACE_PRESENCE.detectorMinFaceSize });
 
   if (faces === null) {
-    return { ...EMPTY, code: 'DetectorUnavailable' };
+    return { ...EMPTY, detectorFailed: true };
   }
   if (faces.length === 0) {
     return EMPTY;
   }
 
-  const near = nearFieldFaces(faces, imageWidth, FACE_PRESENCE.bystanderMinWidthRatio);
-
-  if (near.length === 0) {
-    const largest = faces.reduce((best, face) =>
-      faceWidthRatio(face, imageWidth) > faceWidthRatio(best, imageWidth) ? face : best,
-    );
-    return {
-      ...EMPTY,
-      code: 'TooFar',
-      faceCount: faces.length,
-      widthRatio: faceWidthRatio(largest, imageWidth),
-      proximity: clamp01(faceWidthRatio(largest, imageWidth) / FACE_PRESENCE.idealWidthRatio),
-    };
-  }
-
-  if (near.length > 1) {
-    return {
-      ...EMPTY,
-      code: 'Crowded',
-      faceCount: faces.length,
-      nearCount: near.length,
-    };
-  }
-
-  const face = near[0];
-  const geometry = measureFace(face, imageWidth, imageHeight, {
-    idealFaceWidthRatio: FACE_PRESENCE.idealWidthRatio,
-    maxFaceWidthRatio: FACE_PRESENCE.maxWidthRatio,
-    maxCenterOffsetRatio: Math.max(FACE_PRESENCE.maxOffsetXRatio, FACE_PRESENCE.maxOffsetYRatio),
-    maxYawDegrees: FACE_PRESENCE.maxYawDegrees,
-    maxPitchDegrees: FACE_PRESENCE.maxPitchDegrees,
-    maxRollDegrees: FACE_PRESENCE.maxRollDegrees,
-  });
-
-  const base: PresenceReading = {
-    code: 'Ready',
-    ready: false,
-    faceCount: faces.length,
-    nearCount: 1,
-    widthRatio: geometry.widthRatio,
-    centreX: (face.frame.left + face.frame.width / 2) / imageWidth,
-    centreY: (face.frame.top + face.frame.height / 2) / imageHeight,
-    proximity: clamp01(geometry.widthRatio / FACE_PRESENCE.idealWidthRatio),
-    alignment: clamp01(
-      1 -
-        Math.max(
-          geometry.offsetX / FACE_PRESENCE.maxOffsetXRatio,
-          geometry.offsetY / FACE_PRESENCE.maxOffsetYRatio,
-        ),
-    ),
-    geometryScore: geometry.score,
-  };
-
-  if (geometry.widthRatio < FACE_PRESENCE.minWidthRatio) {
-    return { ...base, code: 'TooFar' };
-  }
-  if (geometry.widthRatio > FACE_PRESENCE.maxWidthRatio) {
-    return { ...base, code: 'TooClose' };
-  }
-  if (
-    geometry.offsetX > FACE_PRESENCE.maxOffsetXRatio ||
-    geometry.offsetY > FACE_PRESENCE.maxOffsetYRatio
-  ) {
-    return { ...base, code: 'OffCentre' };
-  }
-  if (
-    geometry.yaw > FACE_PRESENCE.maxYawDegrees ||
-    geometry.pitch > FACE_PRESENCE.maxPitchDegrees ||
-    geometry.roll > FACE_PRESENCE.maxRollDegrees
-  ) {
-    return { ...base, code: 'HeadTurned' };
-  }
-
-  const leftEye = face.leftEyeOpenProbability;
-  const rightEye = face.rightEyeOpenProbability;
-  if (
-    typeof leftEye === 'number' &&
-    typeof rightEye === 'number' &&
-    (leftEye < FACE_PRESENCE.minEyeOpenProbability ||
-      rightEye < FACE_PRESENCE.minEyeOpenProbability)
-  ) {
-    return { ...base, code: 'EyesClosed' };
-  }
-
-  if (geometry.score < FACE_PRESENCE.minGeometryScore) {
-    return { ...base, code: weakestAxis(geometry.offsetX, geometry.offsetY) };
-  }
-
-  return { ...base, ready: true };
-}
-
-export function isSteady(previous: PresenceReading | null, current: PresenceReading) {
-  if (!previous || !previous.nearCount || !current.nearCount) return false;
-
-  const moved = Math.hypot(current.centreX - previous.centreX, current.centreY - previous.centreY);
-  if (moved > FACE_PRESENCE.steadyCentreDelta) return false;
-
-  const scale = Math.abs(current.widthRatio - previous.widthRatio) / Math.max(0.01, previous.widthRatio);
-  return scale <= FACE_PRESENCE.steadyScaleDelta;
-}
-
-function weakestAxis(offsetX: number, offsetY: number): PresenceCode {
-  const framing = Math.max(
-    offsetX / FACE_PRESENCE.maxOffsetXRatio,
-    offsetY / FACE_PRESENCE.maxOffsetYRatio,
+  const selection = selectSubject(
+    faces,
+    imageWidth,
+    imageHeight,
+    FACE_TERMINAL_SUBJECT_RULES,
+    FACE_PRESENCE.minEyeOpenProbability,
   );
-  return framing > 0.6 ? 'OffCentre' : 'HeadTurned';
-}
+  const subject = selection.subject;
 
-function clamp01(value: number) {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(1, value));
+  if (!subject) {
+    return { ...EMPTY, detectedCount: faces.length };
+  }
+
+  const geometry = scoreGeometry(subject, PRESENCE_GEOMETRY);
+
+  return {
+    detectorFailed: false,
+    present: true,
+    crowded: selection.bystanders > 0,
+    widthRatio: geometry.widthRatio,
+    centreX: subject.centreX,
+    centreY: subject.centreY,
+    offsetX: geometry.offsetX,
+    offsetY: geometry.offsetY,
+    yaw: geometry.yaw,
+    pitch: geometry.pitch,
+    roll: geometry.roll,
+    geometryScore: geometry.score,
+    eyesOpen: subject.eyesOpen,
+    detectedCount: faces.length,
+    bystanders: selection.bystanders,
+  };
 }
