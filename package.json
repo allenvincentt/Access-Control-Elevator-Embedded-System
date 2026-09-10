@@ -6,6 +6,7 @@
     "@expo-google-fonts/material-symbols": "^0.4.45",
     "@expo/ui": "~57.0.16",
     "@react-native-ml-kit/face-detection": "^2.0.1",
+    "@sfourdrinier/react-native-ble-plx": "^3.9.3",
     "@supabase/supabase-js": "^2.115.0",
     "base64-arraybuffer": "^1.0.2",
     "expo": "~57.0.20",

@@ -1,11 +1,12 @@
-#include <WiFi.h>
-#include <WebServer.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
 
-static const char *AP_SSID = "ElevatorTerminal";
-static const char *AP_PASSWORD = "elevator123";
-static const IPAddress AP_IP(192, 168, 4, 1);
-static const IPAddress AP_GATEWAY(192, 168, 4, 1);
-static const IPAddress AP_SUBNET(255, 255, 255, 0);
+static const char *BLE_NAME = "ElevatorTerminal";
+static const char *SERVICE_UUID = "6e6c0001-b5a3-f393-e0a9-e50e24dcca9e";
+static const char *STATUS_CHAR_UUID = "6e6c0002-b5a3-f393-e0a9-e50e24dcca9e";
+static const char *COMMAND_CHAR_UUID = "6e6c0003-b5a3-f393-e0a9-e50e24dcca9e";
 static const char *DEVICE_KEY = "Elevator123";
 
 static const uint8_t PIN_BUTTON_FLOOR[3] = {32, 33, 25};
@@ -35,13 +36,19 @@ static const char *sessionResult = "none";
 static uint32_t doorOpenedAt = 0;
 static uint32_t travelStartedAt = 0;
 
+static char ackId[24] = "none";
+static const char *ackAction = "none";
+static bool ackOk = false;
+static const char *ackError = "none";
+
 static bool buttonStableHigh[3] = {true, true, true};
 static bool buttonLastReadHigh[3] = {true, true, true};
 static uint32_t buttonChangedAt[3] = {0, 0, 0};
 
-static WebServer server(80);
-
-static const char *COLLECTED_HEADERS[] = {"X-Elevator-Key"};
+static BLECharacteristic *statusChar = nullptr;
+static bool clientConnected = false;
+static volatile bool commandPending = false;
+static char commandBuffer[256] = "";
 
 static void applyFloorLeds() {
   for (uint8_t i = 0; i < 3; i++) {
@@ -86,13 +93,6 @@ static uint32_t remainingWindowMs() {
   return elapsed >= DOOR_OPEN_WINDOW_MS ? 0 : DOOR_OPEN_WINDOW_MS - elapsed;
 }
 
-static bool requestAuthorized() {
-  if (!server.hasHeader("X-Elevator-Key")) {
-    return false;
-  }
-  return server.header("X-Elevator-Key").equals(DEVICE_KEY);
-}
-
 static bool grantIncludesFloor(const String &body, const char *key) {
   int floorsAt = body.indexOf("\"floors\"");
   if (floorsAt < 0) {
@@ -133,6 +133,12 @@ static void extractJsonString(const String &body, const char *key, char *out, si
   out[outSize - 1] = '\0';
 }
 
+static bool commandAuthorized(const String &body) {
+  char key[32];
+  extractJsonString(body, "key", key, sizeof(key));
+  return strcmp(key, DEVICE_KEY) == 0;
+}
+
 static String statusJson() {
   String json = "{";
   json += "\"state\":\"";
@@ -153,55 +159,39 @@ static String statusJson() {
   json += sessionResult;
   json += "\",\"remaining_ms\":";
   json += String(remainingWindowMs());
-  json += ",\"token\":";
-  if (grantToken[0] == '\0') {
-    json += "null";
-  } else {
-    json += "\"";
-    json += grantToken;
-    json += "\"";
-  }
-  json += "}";
+  json += ",\"ack_id\":\"";
+  json += ackId;
+  json += "\",\"ack_action\":\"";
+  json += ackAction;
+  json += "\",\"ack_ok\":";
+  json += ackOk ? "true" : "false";
+  json += ",\"ack_error\":\"";
+  json += ackError;
+  json += "\"}";
   return json;
 }
 
-static void sendJson(int code, const String &json) {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.sendHeader("Cache-Control", "no-store");
-  server.send(code, "application/json", json);
-}
-
-static void sendError(int code, const char *reason) {
-  String json = "{\"ok\":false,\"error\":\"";
-  json += reason;
-  json += "\"}";
-  sendJson(code, json);
-}
-
-static void handleOptions() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  server.sendHeader("Access-Control-Allow-Headers", "Content-Type, X-Elevator-Key");
-  server.send(204);
-}
-
-static void handleStatus() {
-  sendJson(200, statusJson());
-}
-
-static void handleGrant() {
-  if (!requestAuthorized()) {
-    Serial.println("[grant] rejected: bad device key");
-    sendError(401, "unauthorized");
+static void publishStatus() {
+  if (statusChar == nullptr) {
     return;
   }
+  String json = statusJson();
+  statusChar->setValue((uint8_t *)json.c_str(), json.length());
+  if (clientConnected) {
+    statusChar->notify();
+  }
+}
+
+static void processGrant(const String &body) {
+  ackAction = "grant";
+
   if (state != STATE_IDLE) {
+    ackOk = false;
+    ackError = "busy";
     Serial.println("[grant] rejected: elevator busy");
-    sendError(409, "busy");
     return;
   }
 
-  String body = server.arg("plain");
   uint8_t authorizedCount = 0;
   for (uint8_t i = 0; i < 3; i++) {
     floorAuthorized[i] = grantIncludesFloor(body, FLOOR_KEY[i]);
@@ -212,8 +202,9 @@ static void handleGrant() {
 
   if (authorizedCount == 0) {
     clearGrant();
+    ackOk = false;
+    ackError = "no_authorized_floors";
     Serial.println("[grant] rejected: no authorized floors in payload");
-    sendError(400, "no_authorized_floors");
     return;
   }
 
@@ -228,6 +219,9 @@ static void handleGrant() {
   setDoorLed(true);
   applyFloorLeds();
 
+  ackOk = true;
+  ackError = "none";
+
   Serial.print("[grant] door open for ");
   Serial.print(grantStaff[0] == '\0' ? "unnamed staff" : grantStaff);
   Serial.print(" | floors:");
@@ -238,24 +232,45 @@ static void handleGrant() {
     }
   }
   Serial.println();
-
-  sendJson(200, statusJson());
 }
 
-static void handleReset() {
-  if (!requestAuthorized()) {
-    sendError(401, "unauthorized");
-    return;
-  }
+static void processReset() {
+  ackAction = "reset";
   selectedKey[0] = '\0';
   sessionResult = "cancelled";
   enterIdle();
+  ackOk = true;
+  ackError = "none";
   Serial.println("[reset] session cancelled, door closed");
-  sendJson(200, statusJson());
 }
 
-static void handleNotFound() {
-  sendError(404, "not_found");
+static void processCommand(const String &body) {
+  char action[16];
+  extractJsonString(body, "action", action, sizeof(action));
+  extractJsonString(body, "cmd_id", ackId, sizeof(ackId));
+
+  if (!commandAuthorized(body)) {
+    ackAction = "denied";
+    ackOk = false;
+    ackError = "unauthorized";
+    Serial.println("[command] rejected: bad device key");
+    publishStatus();
+    return;
+  }
+
+  if (strcmp(action, "grant") == 0) {
+    processGrant(body);
+  } else if (strcmp(action, "reset") == 0) {
+    processReset();
+  } else {
+    ackAction = "unknown";
+    ackOk = false;
+    ackError = "unknown_action";
+    Serial.print("[command] unknown action: ");
+    Serial.println(action);
+  }
+
+  publishStatus();
 }
 
 static void onButtonPressed(uint8_t index) {
@@ -280,6 +295,7 @@ static void onButtonPressed(uint8_t index) {
 
   Serial.print("[button] accepted, traveling to ");
   Serial.println(FLOOR_KEY[index]);
+  publishStatus();
 }
 
 static void pollButtons() {
@@ -311,6 +327,7 @@ static void serviceStateMachine() {
     sessionResult = "timeout";
     enterIdle();
     Serial.println("[timeout] no authorized selection in 30s, door closed");
+    publishStatus();
     return;
   }
 
@@ -323,26 +340,41 @@ static void serviceStateMachine() {
     clearGrant();
     Serial.print("[arrived] ");
     Serial.println(FLOOR_KEY[currentFloor]);
+    publishStatus();
   }
 }
 
-static void startAccessPoint() {
-  WiFi.mode(WIFI_AP);
-  WiFi.setSleep(false);
-  WiFi.softAPConfig(AP_IP, AP_GATEWAY, AP_SUBNET);
-
-  bool started = WiFi.softAP(AP_SSID, AP_PASSWORD);
-  if (!started) {
-    Serial.println("[wifi] access point failed to start");
-    return;
+class ServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer *server) override {
+    clientConnected = true;
+    Serial.println("[ble] terminal connected");
   }
 
-  Serial.print("[wifi] access point \"");
-  Serial.print(AP_SSID);
-  Serial.println("\" is up");
-  Serial.print("[wifi] terminal URL: http://");
-  Serial.println(WiFi.softAPIP());
-}
+  void onDisconnect(BLEServer *server) override {
+    clientConnected = false;
+    Serial.println("[ble] terminal disconnected, advertising again");
+    BLEDevice::startAdvertising();
+  }
+};
+
+class StatusCallbacks : public BLECharacteristicCallbacks {
+  void onRead(BLECharacteristic *characteristic) override {
+    String json = statusJson();
+    characteristic->setValue((uint8_t *)json.c_str(), json.length());
+  }
+};
+
+class CommandCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *characteristic) override {
+    String value = characteristic->getValue().c_str();
+    if (value.length() == 0 || value.length() >= sizeof(commandBuffer)) {
+      return;
+    }
+    strncpy(commandBuffer, value.c_str(), sizeof(commandBuffer) - 1);
+    commandBuffer[sizeof(commandBuffer) - 1] = '\0';
+    commandPending = true;
+  }
+};
 
 void setup() {
   Serial.begin(115200);
@@ -363,24 +395,44 @@ void setup() {
   enterIdle();
   Serial.println("[boot] idle at MainLobby, door closed, buttons disarmed");
 
-  startAccessPoint();
+  BLEDevice::init(BLE_NAME);
+  BLEDevice::setMTU(247);
 
-  server.collectHeaders(COLLECTED_HEADERS, 1);
-  server.on("/status", HTTP_GET, handleStatus);
-  server.on("/status", HTTP_OPTIONS, handleOptions);
-  server.on("/grant", HTTP_POST, handleGrant);
-  server.on("/grant", HTTP_OPTIONS, handleOptions);
-  server.on("/reset", HTTP_POST, handleReset);
-  server.on("/reset", HTTP_OPTIONS, handleOptions);
-  server.on("/", HTTP_GET, handleStatus);
-  server.onNotFound(handleNotFound);
-  server.begin();
+  BLEServer *server = BLEDevice::createServer();
+  server->setCallbacks(new ServerCallbacks());
 
-  Serial.println("[http] listening on port 80");
+  BLEService *service = server->createService(SERVICE_UUID);
+
+  statusChar = service->createCharacteristic(
+    STATUS_CHAR_UUID,
+    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+  statusChar->addDescriptor(new BLE2902());
+  statusChar->setCallbacks(new StatusCallbacks());
+
+  BLECharacteristic *commandChar = service->createCharacteristic(
+    COMMAND_CHAR_UUID,
+    BLECharacteristic::PROPERTY_WRITE);
+  commandChar->setCallbacks(new CommandCallbacks());
+
+  service->start();
+
+  BLEAdvertising *advertising = BLEDevice::getAdvertising();
+  advertising->addServiceUUID(SERVICE_UUID);
+  advertising->setScanResponse(true);
+  BLEDevice::startAdvertising();
+
+  publishStatus();
+  Serial.print("[ble] advertising as \"");
+  Serial.print(BLE_NAME);
+  Serial.println("\", terminal can now pair");
 }
 
 void loop() {
-  server.handleClient();
+  if (commandPending) {
+    commandPending = false;
+    processCommand(String(commandBuffer));
+  }
   pollButtons();
   serviceStateMachine();
+  delay(5);
 }

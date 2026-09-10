@@ -1,9 +1,20 @@
+import { decode as base64ToBuffer, encode as bufferToBase64 } from 'base64-arraybuffer';
+import { PermissionsAndroid, Platform } from 'react-native';
+import { BleManager, State, type Device } from '@sfourdrinier/react-native-ble-plx';
+
 import { isFloorKey } from '@/constants/floors';
-import { ELEVATOR_BASE_URL, ELEVATOR_DEVICE_KEY, IS_ELEVATOR_CONFIGURED } from '@/lib/env';
+import { ELEVATOR_DEVICE_KEY, ELEVATOR_DEVICE_NAME, IS_ELEVATOR_CONFIGURED } from '@/lib/env';
 import { AppError } from '@/lib/errors';
 import type { FloorKey } from '@/types/database';
 
-const REQUEST_TIMEOUT_MS = 6000;
+const SERVICE_UUID = '6e6c0001-b5a3-f393-e0a9-e50e24dcca9e';
+const STATUS_CHAR_UUID = '6e6c0002-b5a3-f393-e0a9-e50e24dcca9e';
+const COMMAND_CHAR_UUID = '6e6c0003-b5a3-f393-e0a9-e50e24dcca9e';
+
+const SCAN_TIMEOUT_MS = 8000;
+const CONNECT_TIMEOUT_MS = 8000;
+const ACK_ATTEMPTS = 20;
+const ACK_INTERVAL_MS = 70;
 
 export type ElevatorState = 'idle' | 'door_open' | 'traveling';
 export type ElevatorSessionResult = 'none' | 'arrived' | 'timeout' | 'cancelled';
@@ -17,13 +28,206 @@ export type ElevatorStatus = {
   remainingMs: number;
 };
 
-const STATUS_FAILURES: Record<number, string> = {
-  400: 'The elevator controller rejected the unlock: no authorized floors were sent.',
-  401: 'The elevator controller rejected this terminal. Check EXPO_PUBLIC_ELEVATOR_KEY.',
-  409: 'The elevator is still finishing another trip. Wait for the door to close and retry.',
+const ACK_FAILURES: Record<string, string> = {
+  unauthorized: 'The elevator controller rejected this terminal. Check EXPO_PUBLIC_ELEVATOR_KEY.',
+  busy: 'The elevator is still finishing another trip. Wait for the door to close and retry.',
+  no_authorized_floors:
+    'The elevator controller rejected the unlock: no authorized floors were sent.',
+  unknown_action: 'The elevator controller did not understand the request.',
 };
 
-function readState(value: unknown): ElevatorState {
+let manager: BleManager | null = null;
+let link: Device | null = null;
+let connecting: Promise<Device> | null = null;
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+function getManager(): BleManager {
+  if (!manager) {
+    manager = new BleManager();
+  }
+  return manager;
+}
+
+function encodePayload(value: unknown): string {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  return bufferToBase64(bytes.buffer as ArrayBuffer);
+}
+
+function decodePayload(value: string): Record<string, unknown> {
+  const text = new TextDecoder().decode(base64ToBuffer(value));
+  const parsed: unknown = JSON.parse(text);
+  if (typeof parsed !== 'object' || parsed === null) {
+    throw new AppError('ELEVATOR_BAD_RESPONSE', 'The elevator controller sent an unreadable reply.');
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function unreachable(error: unknown): AppError {
+  if (error instanceof AppError) return error;
+  return new AppError(
+    'ELEVATOR_UNREACHABLE',
+    'The elevator controller could not be reached over Bluetooth. Check that it is powered on and this phone is paired.',
+  );
+}
+
+async function ensurePermissions(): Promise<void> {
+  if (Platform.OS !== 'android') return;
+
+  const sdk = typeof Platform.Version === 'number' ? Platform.Version : Number(Platform.Version);
+  const wanted =
+    sdk >= 31
+      ? [
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+        ]
+      : [PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION];
+
+  const granted = await PermissionsAndroid.requestMultiple(wanted);
+  const missing = wanted.filter((name) => granted[name] !== PermissionsAndroid.RESULTS.GRANTED);
+  if (missing.length > 0) {
+    throw new AppError(
+      'ELEVATOR_NO_PERMISSION',
+      'Bluetooth permission is required to reach the elevator controller. Enable it in Settings.',
+    );
+  }
+}
+
+async function ensurePoweredOn(): Promise<void> {
+  const current = await getManager().state();
+  if (current === State.PoweredOn) return;
+
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      subscription.remove();
+      reject(
+        new AppError('ELEVATOR_BT_OFF', 'Turn on Bluetooth to reach the elevator controller.'),
+      );
+    }, 4000);
+
+    const subscription = getManager().onStateChange((next) => {
+      if (next === State.PoweredOn) {
+        clearTimeout(timer);
+        subscription.remove();
+        resolve();
+      }
+    }, true);
+  });
+}
+
+async function scanForController(): Promise<Device> {
+  const ble = getManager();
+  return new Promise<Device>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      ble.stopDeviceScan();
+      reject(
+        new AppError(
+          'ELEVATOR_NOT_FOUND',
+          'The elevator controller was not found nearby. Check that it is powered on.',
+        ),
+      );
+    }, SCAN_TIMEOUT_MS);
+
+    ble.startDeviceScan([SERVICE_UUID], null, (error, device) => {
+      if (error) {
+        clearTimeout(timer);
+        ble.stopDeviceScan();
+        reject(unreachable(error));
+        return;
+      }
+      if (device && (device.name === ELEVATOR_DEVICE_NAME || device.localName === ELEVATOR_DEVICE_NAME || !device.name)) {
+        clearTimeout(timer);
+        ble.stopDeviceScan();
+        resolve(device);
+      }
+    });
+  });
+}
+
+async function connect(): Promise<Device> {
+  await ensurePermissions();
+  await ensurePoweredOn();
+
+  const found = await scanForController();
+  const connected = await found.connect({ requestMTU: 247, timeout: CONNECT_TIMEOUT_MS });
+  await connected.discoverAllServicesAndCharacteristics();
+
+  connected.onDisconnected(() => {
+    if (link?.id === connected.id) {
+      link = null;
+    }
+  });
+
+  link = connected;
+  return connected;
+}
+
+async function getLink(): Promise<Device> {
+  if (link && (await link.isConnected())) {
+    return link;
+  }
+  link = null;
+  if (!connecting) {
+    connecting = connect().finally(() => {
+      connecting = null;
+    });
+  }
+  return connecting;
+}
+
+async function readStatusPayload(): Promise<Record<string, unknown>> {
+  try {
+    const device = await getLink();
+    const characteristic = await device.readCharacteristicForService(
+      SERVICE_UUID,
+      STATUS_CHAR_UUID,
+    );
+    if (!characteristic.value) {
+      throw new AppError('ELEVATOR_BAD_RESPONSE', 'The elevator controller sent an empty reply.');
+    }
+    return decodePayload(characteristic.value);
+  } catch (error) {
+    throw unreachable(error);
+  }
+}
+
+async function sendCommand(command: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const cmdId = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  try {
+    const device = await getLink();
+    await device.writeCharacteristicWithResponseForService(
+      SERVICE_UUID,
+      COMMAND_CHAR_UUID,
+      encodePayload({ key: ELEVATOR_DEVICE_KEY, cmd_id: cmdId, ...command }),
+    );
+  } catch (error) {
+    throw unreachable(error);
+  }
+
+  for (let attempt = 0; attempt < ACK_ATTEMPTS; attempt++) {
+    const status = await readStatusPayload();
+    if (status.ack_id === cmdId) {
+      return status;
+    }
+    await delay(ACK_INTERVAL_MS);
+  }
+
+  throw new AppError(
+    'ELEVATOR_TIMEOUT',
+    'The elevator controller did not confirm the request. Move closer and retry.',
+  );
+}
+
+function assertAck(status: Record<string, unknown>): void {
+  if (status.ack_ok === true) return;
+  const reason = typeof status.ack_error === 'string' ? status.ack_error : 'error';
+  throw new AppError(
+    `ELEVATOR_${reason.toUpperCase()}`,
+    ACK_FAILURES[reason] ?? `The elevator controller refused the request (${reason}).`,
+  );
+}
+
+function readStateValue(value: unknown): ElevatorState {
   return value === 'door_open' || value === 'traveling' ? value : 'idle';
 }
 
@@ -35,71 +239,24 @@ function readFloor(value: unknown): FloorKey | null {
   return typeof value === 'string' && isFloorKey(value) ? value : null;
 }
 
-function parseStatus(payload: unknown): ElevatorStatus {
-  if (typeof payload !== 'object' || payload === null) {
-    throw new AppError('ELEVATOR_BAD_RESPONSE', 'The elevator controller sent an unreadable reply.');
-  }
-
-  const raw = payload as Record<string, unknown>;
-  const remaining = Number(raw.remaining_ms);
-
+function parseStatus(payload: Record<string, unknown>): ElevatorStatus {
+  const remaining = Number(payload.remaining_ms);
   return {
-    state: readState(raw.state),
-    doorOpen: raw.door_open === true,
-    currentFloor: readFloor(raw.current_floor),
-    selectedFloor: readFloor(raw.selected_floor),
-    sessionResult: readSessionResult(raw.session_result),
+    state: readStateValue(payload.state),
+    doorOpen: payload.door_open === true,
+    currentFloor: readFloor(payload.current_floor),
+    selectedFloor: readFloor(payload.selected_floor),
+    sessionResult: readSessionResult(payload.session_result),
     remainingMs: Number.isFinite(remaining) ? Math.max(0, remaining) : 0,
   };
 }
 
-async function request(path: string, init?: RequestInit): Promise<unknown> {
+function assertConfigured(): void {
   if (!IS_ELEVATOR_CONFIGURED) {
     throw new AppError(
       'ELEVATOR_NOT_CONFIGURED',
-      'This terminal has no elevator controller address configured.',
+      'This terminal has no elevator device key configured.',
     );
-  }
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(`${ELEVATOR_BASE_URL}${path}`, {
-      ...init,
-      signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Elevator-Key': ELEVATOR_DEVICE_KEY,
-        ...(init?.headers ?? {}),
-      },
-    });
-
-    const payload: unknown = await response.json().catch(() => null);
-
-    if (!response.ok) {
-      throw new AppError(
-        `ELEVATOR_${response.status}`,
-        STATUS_FAILURES[response.status] ??
-          `The elevator controller refused the request (${response.status}).`,
-      );
-    }
-
-    return payload;
-  } catch (error) {
-    if (error instanceof AppError) throw error;
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new AppError(
-        'ELEVATOR_TIMEOUT',
-        'The elevator controller did not answer. Check that this phone is connected to the ElevatorTerminal Wi-Fi.',
-      );
-    }
-    throw new AppError(
-      'ELEVATOR_UNREACHABLE',
-      'The elevator controller could not be reached. Check that this phone is connected to the ElevatorTerminal Wi-Fi.',
-    );
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -108,6 +265,7 @@ export async function openDoorForStaff(
   floors: FloorKey[],
   staffName: string,
 ): Promise<ElevatorStatus> {
+  assertConfigured();
   if (floors.length === 0) {
     throw new AppError(
       'ELEVATOR_NO_FLOORS',
@@ -115,21 +273,24 @@ export async function openDoorForStaff(
     );
   }
 
-  const payload = await request('/grant', {
-    method: 'POST',
-    body: JSON.stringify({ token: sessionToken, floors, staff: staffName }),
+  const status = await sendCommand({
+    action: 'grant',
+    token: sessionToken,
+    floors,
+    staff: staffName,
   });
-
-  return parseStatus(payload);
+  assertAck(status);
+  return parseStatus(status);
 }
 
 export async function readElevatorStatus(): Promise<ElevatorStatus> {
-  return parseStatus(await request('/status'));
+  assertConfigured();
+  return parseStatus(await readStatusPayload());
 }
 
 export async function cancelElevatorSession(): Promise<void> {
   try {
-    await request('/reset', { method: 'POST' });
+    await sendCommand({ action: 'reset' });
   } catch {
     return;
   }

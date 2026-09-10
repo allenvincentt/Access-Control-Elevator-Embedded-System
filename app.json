@@ -9,7 +9,10 @@
     "userInterfaceStyle": "light",
     "backgroundColor": "#F4EFED",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSBluetoothAlwaysUsageDescription": "Elevator System uses Bluetooth to unlock the elevator door at the lobby terminal."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -45,7 +48,13 @@
       ],
       "expo-secure-store",
       "react-native-fast-tflite",
-      "expo-asset"
+      "expo-asset",
+      [
+        "@sfourdrinier/react-native-ble-plx",
+        {
+          "isBackgroundEnabled": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
