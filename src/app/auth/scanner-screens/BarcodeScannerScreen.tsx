@@ -1,20 +1,23 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { CameraView } from 'expo-camera';
+import { CameraView } from "expo-camera";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { StyleSheet, Text, View } from "react-native";
 
-import type { VerificationSession } from '@/app/auth/scanner-screens/ScannerFlow';
-import { useSnackbar } from '@/components/common/Snackbar';
-import { HintRow } from '@/components/HintRow';
-import { CameraPermissionGate } from '@/components/scanner/CameraPermissionGate';
-import { ScannerOverlay, type ScannerStatus } from '@/components/scanner/ScannerOverlay';
-import { ScannerScaffold } from '@/components/scanner/ScannerScaffold';
-import { GeneralButton } from '@/components/ui/buttons/GeneralButton';
-import { Icon } from '@/components/ui/Icon';
-import { Input } from '@/components/ui/Input';
-import { colors, spacing, typography } from '@/constants/themeColor';
-import { getDeviceId } from '@/lib/deviceId';
-import { DENIAL_MESSAGES, errorMessage } from '@/lib/errors';
-import { verifyBarcode } from '@/services/verificationService';
+import type { VerificationSession } from "@/app/auth/scanner-screens/ScannerFlow";
+import { useSnackbar } from "@/components/common/Snackbar";
+import { HintRow } from "@/components/HintRow";
+import { CameraPermissionGate } from "@/components/scanner/CameraPermissionGate";
+import {
+  ScannerOverlay,
+  type ScannerStatus,
+} from "@/components/scanner/ScannerOverlay";
+import { ScannerScaffold } from "@/components/scanner/ScannerScaffold";
+import { GeneralButton } from "@/components/ui/buttons/GeneralButton";
+import { Icon } from "@/components/ui/Icon";
+import { Input } from "@/components/ui/Input";
+import { colors, spacing, typography } from "@/constants/themeColor";
+import { getDeviceId } from "@/lib/deviceId";
+import { DENIAL_MESSAGES, errorMessage } from "@/lib/errors";
+import { verifyBarcode } from "@/services/verificationService";
 
 export type BarcodeScannerScreenProps = {
   onVerified: (session: VerificationSession) => void;
@@ -24,27 +27,30 @@ export type BarcodeScannerScreenProps = {
 const RESCAN_COOLDOWN_MS = 1500;
 
 const CAPTIONS: Record<ScannerStatus, string> = {
-  idle: 'Point the camera at your access barcode',
-  scanning: 'Align the barcode inside the frame',
-  verifying: 'Checking your access barcode…',
-  error: 'Barcode not accepted',
-  success: 'Barcode verified',
+  idle: "Point the camera at your access barcode",
+  scanning: "Align the barcode inside the frame",
+  verifying: "Checking your access barcode…",
+  error: "Barcode not accepted",
+  success: "Barcode verified",
 };
 
 const HINTS = [
-  'Hold the phone 15–20 cm away so the whole barcode is inside the frame.',
-  'Make sure there is enough light and the barcode is not creased or glare-covered.',
-  'Use the ID barcode issued by facilities — personal QR codes are not accepted.',
+  "Hold the phone 15–20 cm away so the whole barcode is inside the frame.",
+  "Make sure there is enough light and the barcode is not creased or glare-covered.",
+  "Use the ID barcode issued by facilities — personal QR codes are not accepted.",
 ];
 
-export function BarcodeScannerScreen({ onVerified, onExit }: BarcodeScannerScreenProps) {
+export function BarcodeScannerScreen({
+  onVerified,
+  onExit,
+}: BarcodeScannerScreenProps) {
   const snackbar = useSnackbar();
 
-  const [status, setStatus] = useState<ScannerStatus>('scanning');
+  const [status, setStatus] = useState<ScannerStatus>("scanning");
   const [attempts, setAttempts] = useState(0);
   const [denial, setDenial] = useState<string | null>(null);
   const [manualOpen, setManualOpen] = useState(false);
-  const [manualCode, setManualCode] = useState('');
+  const [manualCode, setManualCode] = useState("");
 
   const lastScan = useRef<{ code: string; at: number } | null>(null);
   const mounted = useRef(true);
@@ -58,7 +64,7 @@ export function BarcodeScannerScreen({ onVerified, onExit }: BarcodeScannerScree
 
   const runVerification = useCallback(
     async (raw: string) => {
-      setStatus('verifying');
+      setStatus("verifying");
       setDenial(null);
 
       try {
@@ -67,8 +73,10 @@ export function BarcodeScannerScreen({ onVerified, onExit }: BarcodeScannerScree
         if (!mounted.current) return;
 
         if (result.ok) {
-          setStatus('success');
-          snackbar.show(`Badge verified — ${result.staff.full_name}`, { variant: 'success' });
+          setStatus("success");
+          snackbar.show(`Badge verified — ${result.staff.full_name}`, {
+            variant: "success",
+          });
           setTimeout(() => {
             if (!mounted.current) return;
             onVerified({
@@ -81,17 +89,20 @@ export function BarcodeScannerScreen({ onVerified, onExit }: BarcodeScannerScree
           return;
         }
 
-        setStatus('error');
+        setStatus("error");
         setAttempts((count) => count + 1);
         setDenial(DENIAL_MESSAGES[result.reason]);
-        snackbar.show(DENIAL_MESSAGES[result.reason], { variant: 'error' });
+        snackbar.show(DENIAL_MESSAGES[result.reason], { variant: "error" });
       } catch (error) {
         if (!mounted.current) return;
-        setStatus('error');
+        setStatus("error");
         setAttempts((count) => count + 1);
-        const message = errorMessage(error, 'The barcode could not be checked.');
+        const message = errorMessage(
+          error,
+          "The barcode could not be checked.",
+        );
         setDenial(message);
-        snackbar.show(message, { variant: 'error' });
+        snackbar.show(message, { variant: "error" });
       }
     },
     [onVerified, snackbar],
@@ -99,11 +110,15 @@ export function BarcodeScannerScreen({ onVerified, onExit }: BarcodeScannerScree
 
   const handleScan = useCallback(
     (data: string) => {
-      if (status !== 'scanning') return;
+      if (status !== "scanning") return;
 
       const code = data.trim().toUpperCase();
       const now = Date.now();
-      if (lastScan.current && lastScan.current.code === code && now - lastScan.current.at < RESCAN_COOLDOWN_MS) {
+      if (
+        lastScan.current &&
+        lastScan.current.code === code &&
+        now - lastScan.current.at < RESCAN_COOLDOWN_MS
+      ) {
         return;
       }
       lastScan.current = { code, at: now };
@@ -115,8 +130,8 @@ export function BarcodeScannerScreen({ onVerified, onExit }: BarcodeScannerScree
   const reset = useCallback(() => {
     setDenial(null);
     setManualOpen(false);
-    setManualCode('');
-    setStatus('scanning');
+    setManualCode("");
+    setStatus("scanning");
   }, []);
 
   const hint = HINTS[Math.min(attempts, HINTS.length - 1)];
@@ -138,50 +153,72 @@ export function BarcodeScannerScreen({ onVerified, onExit }: BarcodeScannerScree
           <>
             <CameraView
               style={StyleSheet.absoluteFill}
-              facing="front"
+              facing="back"
               barcodeScannerSettings={{
-                barcodeTypes: ['qr', 'code128', 'code39', 'ean13', 'ean8', 'pdf417', 'upc_a'],
+                barcodeTypes: [
+                  "qr",
+                  "code128",
+                  "code39",
+                  "ean13",
+                  "ean8",
+                  "pdf417",
+                  "upc_a",
+                ],
               }}
               onBarcodeScanned={
-                status === 'scanning' ? (result) => handleScan(result.data) : undefined
+                status === "scanning"
+                  ? (result) => handleScan(result.data)
+                  : undefined
               }
             />
-            <ScannerOverlay shape="square" status={status} caption={CAPTIONS[status]} />
+            <ScannerOverlay
+              shape="square"
+              status={status}
+              caption={CAPTIONS[status]}
+            />
           </>
         }
         panel={
-          status === 'error' ? (
+          status === "error" ? (
             <>
               <View style={styles.panelHead}>
                 <Icon name="error" size={20} color={colors.danger} />
                 <Text style={styles.panelTitle}>Access denied</Text>
               </View>
               <HintRow tone="danger" title="Why">
-                {denial ?? 'That badge could not be verified.'}
+                {denial ?? "That badge could not be verified."}
               </HintRow>
               <HintRow tone="warning" title="Helpful hint">
                 {hint}
               </HintRow>
-              <GeneralButton label="Scan again" icon="refresh" fullWidth onPress={reset} />
+              <GeneralButton
+                label="Scan again"
+                icon="refresh"
+                fullWidth
+                onPress={reset}
+              />
             </>
-          ) : status === 'success' ? (
+          ) : status === "success" ? (
             <>
               <View style={styles.panelHead}>
                 <Icon name="checkCircle" size={20} color={colors.success} />
                 <Text style={styles.panelTitle}>Barcode verified</Text>
               </View>
-              <Text style={styles.panelBody}>Continuing to face verification…</Text>
+              <Text style={styles.panelBody}>
+                Continuing to face verification…
+              </Text>
             </>
           ) : (
             <>
               <View style={styles.panelHead}>
                 <Icon name="qr" size={20} color={colors.primary} />
                 <Text style={styles.panelTitle}>
-                  {status === 'verifying' ? 'Verifying…' : 'Ready to scan'}
+                  {status === "verifying" ? "Verifying…" : "Ready to scan"}
                 </Text>
               </View>
               <Text style={styles.panelBody}>
-                Keep the barcode flat and centred. Verification starts automatically.
+                Keep the barcode flat and centred. Verification starts
+                automatically.
               </Text>
 
               {manualOpen ? (
@@ -193,8 +230,7 @@ export function BarcodeScannerScreen({ onVerified, onExit }: BarcodeScannerScree
                     onChangeText={(text) => setManualCode(text.toUpperCase())}
                     autoCapitalize="characters"
                     autoCorrect={false}
-                    placeholder="ELV-0000"
-                    editable={status !== 'verifying'}
+                    editable={status !== "verifying"}
                     returnKeyType="go"
                     onSubmitEditing={() => void runVerification(manualCode)}
                   />
@@ -205,7 +241,7 @@ export function BarcodeScannerScreen({ onVerified, onExit }: BarcodeScannerScree
                       variant="ghost"
                       onPress={() => setManualOpen(false)}
                       style={styles.manualBtn}
-                      disabled={status === 'verifying'}
+                      disabled={status === "verifying"}
                     />
                     <GeneralButton
                       label="Verify"
@@ -213,7 +249,9 @@ export function BarcodeScannerScreen({ onVerified, onExit }: BarcodeScannerScree
                       icon="check"
                       onPress={() => void runVerification(manualCode)}
                       style={styles.manualBtn}
-                      disabled={status === 'verifying' || manualCode.trim().length < 3}
+                      disabled={
+                        status === "verifying" || manualCode.trim().length < 3
+                      }
                     />
                   </View>
                 </View>
@@ -224,7 +262,7 @@ export function BarcodeScannerScreen({ onVerified, onExit }: BarcodeScannerScree
                   variant="ghost"
                   icon="badge"
                   onPress={() => setManualOpen(true)}
-                  disabled={status === 'verifying'}
+                  disabled={status === "verifying"}
                 />
               )}
             </>
@@ -237,8 +275,8 @@ export function BarcodeScannerScreen({ onVerified, onExit }: BarcodeScannerScree
 
 const styles = StyleSheet.create({
   panelHead: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: spacing.sm,
   },
   panelTitle: {
@@ -256,7 +294,7 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
   },
   manualRow: {
-    flexDirection: 'row',
+    flexDirection: "row",
     gap: spacing.sm,
   },
   manualBtn: {
