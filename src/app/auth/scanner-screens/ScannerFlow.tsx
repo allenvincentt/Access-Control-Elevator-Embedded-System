@@ -1,8 +1,8 @@
 import { useCallback, useState } from 'react';
 
 import { BarcodeScannerScreen } from '@/app/auth/scanner-screens/BarcodeScannerScreen';
+import { DoorReleaseScreen } from '@/app/auth/scanner-screens/DoorReleaseScreen';
 import { FacialRecognitionScreen } from '@/app/auth/scanner-screens/FacialRecognitionScreen';
-import { FloorSelectScreen } from '@/app/auth/scanner-screens/FloorSelectScreen';
 import { cancelVerificationSession } from '@/services/verificationService';
 import type { FloorKey } from '@/types/database';
 
@@ -16,7 +16,7 @@ export type VerificationSession = {
 type Stage =
   | { step: 'barcode' }
   | { step: 'face'; session: VerificationSession }
-  | { step: 'floor'; session: VerificationSession; floors: FloorKey[] };
+  | { step: 'release'; session: VerificationSession; floors: FloorKey[] };
 
 export type ScannerFlowProps = {
   onExit: () => void;
@@ -33,7 +33,7 @@ export function ScannerFlow({ onExit }: ScannerFlowProps) {
 
   const handleFacePassed = useCallback((floors: FloorKey[]) => {
     setStage((current) =>
-      current.step === 'face' ? { step: 'floor', session: current.session, floors } : current,
+      current.step === 'face' ? { step: 'release', session: current.session, floors } : current,
     );
   }, []);
 
@@ -59,7 +59,7 @@ export function ScannerFlow({ onExit }: ScannerFlowProps) {
   }
 
   return (
-    <FloorSelectScreen
+    <DoorReleaseScreen
       session={stage.session}
       floors={stage.floors}
       onFinished={reset}

@@ -7,6 +7,7 @@ import {
   FACE_INPUT_SIZE,
   FACE_ISSUE_MESSAGES,
   FACE_QUALITY_GATES,
+  type FaceQualityGates,
   type FaceQualityIssue,
 } from '@/services/face/constants';
 import { detectSingleFace, faceCropRect } from '@/services/face/detector';
@@ -29,21 +30,31 @@ export type FaceCaptureOutcome =
   | { ok: true; capture: FaceCapture }
   | { ok: false; issue: FaceQualityIssue; message: string };
 
-function fail(issue: FaceQualityIssue): FaceCaptureOutcome {
-  return { ok: false, issue, message: FACE_ISSUE_MESSAGES[issue] };
-}
+export type FaceCaptureOptions = {
+  gates?: FaceQualityGates;
+  messages?: Record<FaceQualityIssue, string>;
+};
 
-export async function captureFaceFromPhoto(photo: CapturedPhoto): Promise<FaceCaptureOutcome> {
+export async function captureFaceFromPhoto(
+  photo: CapturedPhoto,
+  { gates = FACE_QUALITY_GATES, messages = FACE_ISSUE_MESSAGES }: FaceCaptureOptions = {},
+): Promise<FaceCaptureOutcome> {
+  const fail = (issue: FaceQualityIssue): FaceCaptureOutcome => ({
+    ok: false,
+    issue,
+    message: messages[issue],
+  });
+
   if (!photo?.uri || !photo.width || !photo.height) {
     return fail('CaptureFailed');
   }
 
-  const detection = await detectSingleFace(photo.uri, photo.width, photo.height);
+  const detection = await detectSingleFace(photo.uri, photo.width, photo.height, gates);
   if (!detection.ok) {
     return fail(detection.issue);
   }
 
-  const rect = faceCropRect(detection.detected.face, photo.width, photo.height);
+  const rect = faceCropRect(detection.detected.face, photo.width, photo.height, gates.cropMarginRatio);
   if (rect.width < 24 || rect.height < 24) {
     return fail('FaceTooSmall');
   }
@@ -82,13 +93,13 @@ export async function captureFaceFromPhoto(photo: CapturedPhoto): Promise<FaceCa
 
   const image = analysePixels(rgba, FACE_INPUT_SIZE);
 
-  if (image.meanLuma < FACE_QUALITY_GATES.minMeanLuma || image.meanLuma > FACE_QUALITY_GATES.maxMeanLuma) {
+  if (image.meanLuma < gates.minMeanLuma || image.meanLuma > gates.maxMeanLuma) {
     return fail('PoorLighting');
   }
-  if (image.lumaSpread < FACE_QUALITY_GATES.minLumaSpread) {
+  if (image.lumaSpread < gates.minLumaSpread) {
     return fail('PoorLighting');
   }
-  if (image.sharpness < FACE_QUALITY_GATES.minSharpness) {
+  if (image.sharpness < gates.minSharpness) {
     return fail('Blurry');
   }
 
@@ -100,7 +111,7 @@ export async function captureFaceFromPhoto(photo: CapturedPhoto): Promise<FaceCa
     return fail('ModelUnavailable');
   }
 
-  const sharpnessScore = Math.min(1, image.sharpness / FACE_QUALITY_GATES.targetSharpness);
+  const sharpnessScore = Math.min(1, image.sharpness / gates.targetSharpness);
   const lightingScore = 1 - Math.min(1, Math.abs(image.meanLuma - 132) / 100);
   const quality = round4(
     clamp01(detection.detected.geometryScore * 0.5 + lightingScore * 0.25 + sharpnessScore * 0.25),

@@ -31,3 +31,14 @@ export const IS_SUPABASE_CONFIGURED = SUPABASE_CONFIG_ERROR === null;
 
 export const SUPABASE_URL = IS_SUPABASE_CONFIGURED ? rawUrl : PLACEHOLDER_URL;
 export const SUPABASE_ANON_KEY = IS_SUPABASE_CONFIGURED ? rawKey : PLACEHOLDER_KEY;
+
+const rawElevatorUrl = (process.env.EXPO_PUBLIC_ELEVATOR_URL ?? '').trim();
+const rawElevatorKey = (process.env.EXPO_PUBLIC_ELEVATOR_KEY ?? '').trim();
+
+export const ELEVATOR_BASE_URL = rawElevatorUrl.replace(/\/+$/, '');
+export const ELEVATOR_DEVICE_KEY = rawElevatorKey;
+export const IS_ELEVATOR_CONFIGURED =
+  ELEVATOR_BASE_URL.length > 0 && ELEVATOR_DEVICE_KEY.length > 0;
+export const ELEVATOR_CONFIG_ERROR = IS_ELEVATOR_CONFIGURED
+  ? null
+  : 'EXPO_PUBLIC_ELEVATOR_URL and EXPO_PUBLIC_ELEVATOR_KEY are not set. Point them at the ESP32 on your hotspot, then restart with "npx expo start --clear".';

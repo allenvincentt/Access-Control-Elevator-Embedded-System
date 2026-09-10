@@ -1,5 +1,5 @@
 import { type ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Icon, type IconName } from '@/components/ui/Icon';
@@ -14,6 +14,8 @@ export type ScannerScaffoldProps = {
   onExit: () => void;
   exitIcon?: IconName;
   exitLabel?: string;
+  panelStyle?: StyleProp<ViewStyle>;
+  onPanelHeight?: (height: number) => void;
 };
 
 export function ScannerScaffold({
@@ -25,6 +27,8 @@ export function ScannerScaffold({
   onExit,
   exitIcon = 'logout',
   exitLabel = 'Sign out',
+  panelStyle,
+  onPanelHeight,
 }: ScannerScaffoldProps) {
   return (
     <View style={styles.root}>
@@ -47,7 +51,12 @@ export function ScannerScaffold({
           </Pressable>
         </View>
 
-        <View style={styles.panel}>{panel}</View>
+        <View
+          style={[styles.panel, panelStyle]}
+          onLayout={(event) => onPanelHeight?.(event.nativeEvent.layout.height)}
+        >
+          {panel}
+        </View>
       </SafeAreaView>
     </View>
   );

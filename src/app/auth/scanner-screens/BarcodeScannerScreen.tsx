@@ -138,7 +138,7 @@ export function BarcodeScannerScreen({ onVerified, onExit }: BarcodeScannerScree
           <>
             <CameraView
               style={StyleSheet.absoluteFill}
-              facing="back"
+              facing="front"
               barcodeScannerSettings={{
                 barcodeTypes: ['qr', 'code128', 'code39', 'ean13', 'ean8', 'pdf417', 'upc_a'],
               }}
