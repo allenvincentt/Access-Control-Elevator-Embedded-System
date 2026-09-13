@@ -10,8 +10,7 @@ web-build/
 expo-env.d.ts
 
 # Supabase
-supabase/.temp/
-supabase/.branches/
+supabase/
 
 # Native
 .kotlin/
