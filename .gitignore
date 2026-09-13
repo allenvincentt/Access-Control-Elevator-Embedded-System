@@ -38,6 +38,10 @@ yarn-error.*
 .env
 .env*.local
 
+# Ignore Claude Code files and directories
+CLAUDE.md
+.claude/
+
 # typescript
 *.tsbuildinfo
 
