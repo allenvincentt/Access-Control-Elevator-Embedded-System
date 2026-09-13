@@ -1,39 +1,39 @@
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
-import { HintRow } from '@/components/HintRow';
-import { Screen } from '@/components/layout/Screen';
-import { ScreenHeader } from '@/components/layout/ScreenHeader';
-import { Skeleton } from '@/components/common/SkeletonLoader';
-import { GeneralButton } from '@/components/ui/buttons/GeneralButton';
-import { Card } from '@/components/ui/Card';
-import { Chip } from '@/components/ui/Chip';
-import { Icon } from '@/components/ui/Icon';
-import { floorShortLabel } from '@/constants/floors';
-import { colors, radius, spacing, typography } from '@/constants/themeColor';
-import { useAccessLogs, type LogDecisionFilter } from '@/hooks/useAccessLogs';
-import { DENIAL_MESSAGES } from '@/lib/errors';
-import type { AccessLogRow } from '@/types/database';
+import { Skeleton } from "@/components/common/SkeletonLoader";
+import { HintRow } from "@/components/HintRow";
+import { Screen } from "@/components/layout/Screen";
+import { ScreenHeader } from "@/components/layout/ScreenHeader";
+import { GeneralButton } from "@/components/ui/buttons/GeneralButton";
+import { Card } from "@/components/ui/Card";
+import { Chip } from "@/components/ui/Chip";
+import { Icon } from "@/components/ui/Icon";
+import { floorShortLabel } from "@/constants/floors";
+import { colors, radius, spacing, typography } from "@/constants/themeColor";
+import { useAccessLogs, type LogDecisionFilter } from "@/hooks/useAccessLogs";
+import { DENIAL_MESSAGES } from "@/lib/errors";
+import type { AccessLogRow } from "@/types/database";
 
 const FILTERS: { key: LogDecisionFilter; label: string }[] = [
-  { key: 'all', label: 'All' },
-  { key: 'Granted', label: 'Granted' },
-  { key: 'Denied', label: 'Denied' },
+  { key: "all", label: "All" },
+  { key: "Granted", label: "Granted" },
+  { key: "Denied", label: "Denied" },
 ];
 
 function formatTimestamp(value: string) {
   const date = new Date(value);
   return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
   });
 }
 
 function LogEntry({ log, index = 0 }: { log: AccessLogRow; index?: number }) {
-  const granted = log.decision === 'Granted';
-  const finalGrant = granted && log.stage === 'Face';
+  const granted = log.decision === "Granted";
+  const finalGrant = granted && log.stage === "Face";
 
   return (
     <Card padding="base" reveal revealDelay={Math.min(index, 8) * 60}>
@@ -45,18 +45,18 @@ function LogEntry({ log, index = 0 }: { log: AccessLogRow; index?: number }) {
           ]}
         >
           <Icon
-            name={granted ? 'checkCircle' : 'lock'}
+            name={granted ? "checkCircle" : "lock"}
             size={18}
             color={granted ? colors.success : colors.danger}
           />
         </View>
         <View style={styles.entryIdentity}>
           <Text style={styles.entryName} numberOfLines={1}>
-            {log.staff_name_snapshot ?? 'Unknown badge'}
+            {log.staff_name_snapshot ?? "Unknown badge"}
           </Text>
           <Text style={styles.entryMeta} numberOfLines={1}>
             {log.scanned_company_id}
-            {log.floor ? ` · ${floorShortLabel(log.floor)}` : ''}
+            {log.floor ? ` · ${floorShortLabel(log.floor)}` : ""}
           </Text>
         </View>
         <Text style={styles.entryTime}>{formatTimestamp(log.occurred_at)}</Text>
@@ -65,16 +65,22 @@ function LogEntry({ log, index = 0 }: { log: AccessLogRow; index?: number }) {
       <View style={styles.entryChips}>
         <Chip label={log.stage} tone="neutral" size="sm" />
         <Chip
-          label={finalGrant ? 'Access granted' : granted ? 'Passed' : 'Denied'}
-          tone={granted ? 'success' : 'danger'}
+          label={finalGrant ? "Access granted" : granted ? "Passed" : "Denied"}
+          tone={granted ? "success" : "danger"}
           size="sm"
         />
         {log.match_score != null ? (
-          <Chip label={`Match ${(log.match_score * 100).toFixed(1)}%`} tone="info" size="sm" />
+          <Chip
+            label={`Match ${(log.match_score * 100).toFixed(1)}%`}
+            tone="info"
+            size="sm"
+          />
         ) : null}
       </View>
 
-      {log.reason ? <Text style={styles.entryReason}>{DENIAL_MESSAGES[log.reason]}</Text> : null}
+      {log.reason ? (
+        <Text style={styles.entryReason}>{DENIAL_MESSAGES[log.reason]}</Text>
+      ) : null}
     </Card>
   );
 }
@@ -100,13 +106,7 @@ export function LogsScreen() {
     <Screen
       refreshing={refreshing}
       onRefresh={() => void refresh()}
-      header={
-        <ScreenHeader
-          overline="Activity"
-          title="Logs"
-          subtitle={`${total} recorded verification ${total === 1 ? 'attempt' : 'attempts'}`}
-        />
-      }
+      header={<ScreenHeader overline="Activity" title="Logs" />}
     >
       <View style={styles.searchField}>
         <Icon name="search" size={18} color={colors.textMuted} />
@@ -130,7 +130,7 @@ export function LogsScreen() {
             accessibilityRole="button"
             accessibilityLabel="Clear search"
             hitSlop={8}
-            onPress={() => setSearch('')}
+            onPress={() => setSearch("")}
           >
             <Icon name="close" size={16} color={colors.textSecondary} />
           </Pressable>
@@ -148,7 +148,9 @@ export function LogsScreen() {
               onPress={() => setDecision(filter.key)}
               style={[styles.filterChip, active && styles.filterChipActive]}
             >
-              <Text style={[styles.filterLabel, active && styles.filterLabelActive]}>
+              <Text
+                style={[styles.filterLabel, active && styles.filterLabelActive]}
+              >
                 {filter.label}
               </Text>
             </Pressable>
@@ -188,7 +190,7 @@ export function LogsScreen() {
 
       {hasMore ? (
         <GeneralButton
-          label={loadingMore ? 'Loading…' : 'Load more'}
+          label={loadingMore ? "Loading…" : "Load more"}
           variant="outline"
           fullWidth
           loading={loadingMore}
@@ -202,8 +204,8 @@ export function LogsScreen() {
 
 const styles = StyleSheet.create({
   searchField: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: spacing.sm,
     height: 50,
     paddingHorizontal: spacing.base,
@@ -221,7 +223,7 @@ const styles = StyleSheet.create({
     ...typography.body,
   },
   filterRow: {
-    flexDirection: 'row',
+    flexDirection: "row",
     gap: spacing.sm,
   },
   filterChip: {
@@ -247,16 +249,16 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   entryTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: spacing.md,
   },
   badge: {
     width: 38,
     height: 38,
     borderRadius: radius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   badgeGranted: {
     backgroundColor: colors.successTint,
@@ -281,8 +283,8 @@ const styles = StyleSheet.create({
     ...typography.caption,
   },
   entryChips: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+    flexDirection: "row",
+    flexWrap: "wrap",
     gap: spacing.xs,
     marginTop: spacing.md,
   },
@@ -293,8 +295,8 @@ const styles = StyleSheet.create({
     lineHeight: 17,
   },
   empty: {
-    marginTop: spacing['3xl'],
-    alignItems: 'center',
+    marginTop: spacing["3xl"],
+    alignItems: "center",
     gap: spacing.sm,
     paddingHorizontal: spacing.xl,
   },
@@ -302,8 +304,8 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: radius.lg,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     backgroundColor: colors.surfaceSunken,
     marginBottom: spacing.xs,
   },
@@ -314,7 +316,7 @@ const styles = StyleSheet.create({
   emptyBody: {
     color: colors.textSecondary,
     ...typography.body,
-    textAlign: 'center',
+    textAlign: "center",
   },
 });
 

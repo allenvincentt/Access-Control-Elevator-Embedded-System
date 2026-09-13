@@ -5,7 +5,6 @@ import { FACE_MODEL_VERSION } from '@/services/face/constants';
 import { removeStaffPhoto } from '@/services/storageService';
 import type {
   AccessStatusKey,
-  DashboardStats,
   EnrollmentResult,
   FaceSamplePayload,
   FloorKey,
@@ -225,10 +224,4 @@ export async function enrollStaffFace(
 export async function resetStaffFace(staffId: string): Promise<void> {
   const { error } = await supabase.rpc('reset_staff_face', { p_staff_id: staffId });
   if (error) throw toAppError(error, 'The face enrollment could not be cleared.');
-}
-
-export async function fetchDashboardStats(): Promise<DashboardStats> {
-  const { data, error } = await supabase.rpc('admin_dashboard_stats');
-  if (error) throw toAppError(error, 'The dashboard could not be loaded.');
-  return data as unknown as DashboardStats;
 }

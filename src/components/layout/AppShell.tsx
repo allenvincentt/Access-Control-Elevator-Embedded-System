@@ -274,7 +274,7 @@ export function AppShell() {
   return (
     <View style={styles.root}>
       <View style={styles.content}>
-        {tab === 'home' ? <HomeScreen /> : null}
+        {tab === 'home' ? <HomeScreen onViewLogs={() => setTab('logs')} /> : null}
         {tab === 'logs' ? <LogsScreen /> : null}
         {tab === 'staff' ? (
           <StaffScreen onCreate={openCreate} onEdit={openEdit} onReenrol={openReenrol} />

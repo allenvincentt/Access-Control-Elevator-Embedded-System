@@ -1,26 +1,25 @@
-import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { useState } from "react";
+import { StyleSheet, Text, View } from "react-native";
 
-import { useSnackbar } from '@/components/common/Snackbar';
-import { Screen } from '@/components/layout/Screen';
-import { ScreenHeader } from '@/components/layout/ScreenHeader';
-import { Avatar } from '@/components/ui/Avatar';
-import { Card } from '@/components/ui/Card';
-import { Chip } from '@/components/ui/Chip';
-import { DetailRow } from '@/components/ui/DetailRow';
-import { GeneralButton } from '@/components/ui/buttons/GeneralButton';
-import { Icon } from '@/components/ui/Icon';
-import { MessageBoxModal } from '@/components/ui/modals/MessageBoxModal';
-import { colors, radius, spacing, typography } from '@/constants/themeColor';
-import { useAuth } from '@/hooks/useAuth';
-import { errorMessage } from '@/lib/errors';
-import { sendPasswordReset } from '@/services/authService';
-import type { UserRoleKey } from '@/types/database';
+import { useSnackbar } from "@/components/common/Snackbar";
+import { Screen } from "@/components/layout/Screen";
+import { ScreenHeader } from "@/components/layout/ScreenHeader";
+import { Avatar } from "@/components/ui/Avatar";
+import { GeneralButton } from "@/components/ui/buttons/GeneralButton";
+import { Card } from "@/components/ui/Card";
+import { Chip } from "@/components/ui/Chip";
+import { DetailRow } from "@/components/ui/DetailRow";
+import { Icon } from "@/components/ui/Icon";
+import { MessageBoxModal } from "@/components/ui/modals/MessageBoxModal";
+import { colors, radius, spacing, typography } from "@/constants/themeColor";
+import { useAuth } from "@/hooks/useAuth";
+import type { UserRoleKey } from "@/types/database";
 
 const ROLE_COPY: Record<UserRoleKey, { label: string; blurb: string }> = {
   Admin: {
-    label: 'Administrator',
-    blurb: 'Full control over staff records, authorized floors, face enrollment, and access logs.',
+    label: "Administrator",
+    blurb:
+      "Full control over staff records, authorized floors, face enrollment, and access logs.",
   },
 };
 
@@ -31,15 +30,6 @@ export function MeScreen() {
 
   if (!profile) return null;
   const role = ROLE_COPY[profile.user_role];
-
-  const handlePasswordReset = async () => {
-    try {
-      await sendPasswordReset(profile.email);
-      snackbar.show('Password reset link sent to your email', { variant: 'info' });
-    } catch (error) {
-      snackbar.show(errorMessage(error, 'Could not send a reset link.'), { variant: 'error' });
-    }
-  };
 
   return (
     <Screen header={<ScreenHeader overline="Account" title="Me" />}>
@@ -65,22 +55,12 @@ export function MeScreen() {
       </View>
 
       <GeneralButton
-        label="Send password reset email"
-        icon="key"
-        variant="outline"
-        fullWidth
-        onPress={() => void handlePasswordReset()}
-      />
-
-      <GeneralButton
         label="Log out"
         icon="logout"
         variant="danger"
         fullWidth
         onPress={() => setConfirmOut(true)}
       />
-
-      <Text style={styles.version}>Elevator System · v1.0.0</Text>
 
       <MessageBoxModal
         visible={confirmOut}
@@ -101,7 +81,7 @@ export function MeScreen() {
 
 const styles = StyleSheet.create({
   profile: {
-    alignItems: 'center',
+    alignItems: "center",
     gap: spacing.sm,
   },
   name: {
@@ -119,7 +99,7 @@ const styles = StyleSheet.create({
     gap: spacing.hair,
   },
   roleNote: {
-    flexDirection: 'row',
+    flexDirection: "row",
     gap: spacing.sm,
     padding: spacing.md,
     borderRadius: radius.md,
@@ -132,7 +112,7 @@ const styles = StyleSheet.create({
     lineHeight: 17,
   },
   version: {
-    textAlign: 'center',
+    textAlign: "center",
     color: colors.textMuted,
     ...typography.caption,
     marginTop: spacing.sm,

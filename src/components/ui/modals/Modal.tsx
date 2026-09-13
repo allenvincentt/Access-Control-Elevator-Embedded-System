@@ -1,3 +1,4 @@
+import { BlurView } from 'expo-blur';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   KeyboardAvoidingView,
@@ -12,16 +13,20 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   Easing,
+  runOnJS,
   useAnimatedStyle,
   useSharedValue,
+  withSpring,
   withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Icon, type IconName } from '@/components/ui/Icon';
 import { colors, radius, shadow, spacing, typography } from '@/constants/themeColor';
+import { useBlurTarget } from '@/hooks/useBlurTarget';
 
 export type ModalProps = {
   visible: boolean;
@@ -41,6 +46,9 @@ export type ModalProps = {
 const SHEET_BREAKPOINT = 768;
 const OPEN_DURATION = 240;
 const CLOSE_DURATION = 180;
+const BLUR_INTENSITY = 22;
+const SHEET_DISMISS_DISTANCE = 110;
+const SHEET_DISMISS_VELOCITY = 800;
 
 export function Modal({
   visible,
@@ -56,17 +64,22 @@ export function Modal({
   scroll = true,
   contentStyle,
 }: ModalProps) {
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  const blurTarget = useBlurTarget();
   const asSheet = variant === 'sheet' || (variant === 'auto' && width < SHEET_BREAKPOINT);
 
   const [mounted, setMounted] = useState(visible);
   const progress = useSharedValue(0);
+  const dragY = useSharedValue(0);
   const openedRef = useRef(false);
+
+  const handleClose = () => onClose();
 
   useEffect(() => {
     if (visible) {
       openedRef.current = true;
+      dragY.set(0);
       // eslint-disable-next-line react-hooks/set-state-in-effect -- mount for the enter animation
       setMounted(true);
       progress.set(withTiming(1, { duration: OPEN_DURATION, easing: Easing.out(Easing.cubic) }));
@@ -76,13 +89,37 @@ export function Modal({
     progress.set(withTiming(0, { duration: CLOSE_DURATION, easing: Easing.in(Easing.cubic) }));
     const timeout = setTimeout(() => setMounted(false), CLOSE_DURATION + 40);
     return () => clearTimeout(timeout);
-  }, [visible, progress]);
+  }, [visible, progress, dragY]);
 
-  const backdropStyle = useAnimatedStyle(() => ({ opacity: progress.value }));
+  useEffect(() => {
+    // Chromium doesn't always composite `backdrop-filter` on a freshly mounted
+    // layer — it stays flat until something forces a relayout (e.g. a window
+    // resize). Nudge that relayout ourselves right after the backdrop mounts.
+    if (Platform.OS !== 'web' || !mounted || typeof window === 'undefined') return;
+    const frame = requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+    return () => cancelAnimationFrame(frame);
+  }, [mounted]);
+
+  const dragGesture = Gesture.Pan()
+    .enabled(asSheet)
+    .onUpdate((event) => {
+      dragY.value = Math.max(0, event.translationY);
+    })
+    .onEnd((event) => {
+      if (event.translationY > SHEET_DISMISS_DISTANCE || event.velocityY > SHEET_DISMISS_VELOCITY) {
+        dragY.value = withTiming(height, { duration: 180, easing: Easing.in(Easing.cubic) }, (finished) => {
+          if (finished) runOnJS(handleClose)();
+        });
+        return;
+      }
+      dragY.value = withSpring(0, { damping: 18, stiffness: 220 });
+    });
+
+  const backdropScrimStyle = useAnimatedStyle(() => ({ opacity: progress.value }));
   const contentAnimStyle = useAnimatedStyle(() => ({
     opacity: progress.value,
     transform: asSheet
-      ? [{ translateY: (1 - progress.value) * 72 }]
+      ? [{ translateY: (1 - progress.value) * 72 + dragY.value }]
       : [
           { translateY: (1 - progress.value) * 16 },
           { scale: 0.94 + progress.value * 0.06 },
@@ -135,14 +172,24 @@ export function Modal({
   return (
     <RNModal visible transparent animationType="none" statusBarTranslucent onRequestClose={onClose}>
       <View style={styles.root}>
-        <Animated.View style={[styles.backdrop, backdropStyle]}>
+        <View style={styles.backdrop} pointerEvents="box-none">
+          {/* Kept at a constant opacity — animating this layer's opacity is what
+              stops Chromium from compositing `backdrop-filter` on first paint. */}
+          <BlurView
+            style={StyleSheet.absoluteFill}
+            tint="dark"
+            intensity={BLUR_INTENSITY}
+            blurTarget={blurTarget ?? undefined}
+            blurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
+          />
+          <Animated.View style={[StyleSheet.absoluteFill, styles.backdropScrim, backdropScrimStyle]} />
           <Pressable
             style={StyleSheet.absoluteFill}
             accessibilityRole="button"
             accessibilityLabel="Dismiss"
             onPress={dismissOnBackdropPress ? onClose : undefined}
           />
-        </Animated.View>
+        </View>
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : Platform.OS === 'android' ? 'height' : undefined}
           style={[styles.avoider, asSheet ? styles.avoiderSheet : styles.avoiderCenter]}
@@ -159,9 +206,15 @@ export function Modal({
             ]}
           >
             {asSheet ? (
-              <View style={styles.grabberArea}>
-                <View style={styles.grabber} />
-              </View>
+              <GestureDetector gesture={dragGesture}>
+                <View
+                  style={styles.grabberArea}
+                  accessibilityRole="adjustable"
+                  accessibilityLabel="Drag to dismiss"
+                >
+                  <View style={styles.grabber} />
+                </View>
+              </GestureDetector>
             ) : null}
             {header}
             {body}
@@ -183,7 +236,9 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: colors.overlay,
+  },
+  backdropScrim: {
+    backgroundColor: colors.scrim,
   },
   avoider: {
     flex: 1,

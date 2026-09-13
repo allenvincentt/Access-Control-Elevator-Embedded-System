@@ -229,7 +229,7 @@ function StaffFormModal({
             style={styles.footerBtn}
           />
           <GeneralButton
-            label={isEdit ? "Save changes" : "Continue to face capture"}
+            label={isEdit ? "Save changes" : "Continue"}
             icon={isEdit ? "check" : "face"}
             onPress={handleSubmit}
             loading={submitting}

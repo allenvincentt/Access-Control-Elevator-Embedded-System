@@ -9,6 +9,7 @@ import { StatusBar } from 'expo-status-bar';
 import { SnackbarProvider } from '@/components/common/Snackbar';
 import { colors } from '@/constants/themeColor';
 import { AuthProvider } from '@/hooks/useAuth';
+import { BlurTargetProvider } from '@/hooks/useBlurTarget';
 import { StaffProvider } from '@/hooks/useStaff';
 
 SplashScreen.preventAutoHideAsync();
@@ -34,13 +35,15 @@ export default function RootLayout() {
         <AuthProvider>
           <StaffProvider>
             <StatusBar style="dark" />
-            <Stack
-              screenOptions={{
-                headerShown: false,
-                contentStyle: { backgroundColor: colors.background },
-                animation: 'none',
-              }}
-            />
+            <BlurTargetProvider>
+              <Stack
+                screenOptions={{
+                  headerShown: false,
+                  contentStyle: { backgroundColor: colors.background },
+                  animation: 'none',
+                }}
+              />
+            </BlurTargetProvider>
           </StaffProvider>
         </AuthProvider>
       </SnackbarProvider>

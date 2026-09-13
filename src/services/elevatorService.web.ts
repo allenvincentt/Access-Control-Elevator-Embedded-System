@@ -11,7 +11,12 @@ export type ElevatorStatus = {
   selectedFloor: FloorKey | null;
   sessionResult: ElevatorSessionResult;
   remainingMs: number;
+  /** BLE clients the controller currently has connected, this device included. */
+  connectedClients: number;
 };
+
+/** Browsers get no Bluetooth link, so scanner presence cannot be read here. */
+export const SCANNER_LINK_SUPPORTED = false;
 
 function unsupported(): never {
   throw new AppError(
@@ -29,6 +34,10 @@ export async function openDoorForStaff(
 }
 
 export async function readElevatorStatus(): Promise<ElevatorStatus> {
+  unsupported();
+}
+
+export async function readConnectedScannerCount(): Promise<number> {
   unsupported();
 }
 

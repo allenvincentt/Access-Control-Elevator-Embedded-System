@@ -49,6 +49,22 @@ export const DENIAL_MESSAGES: Record<DenialReason, string> = {
   InvalidInput: 'That code is not a valid staff barcode.',
 };
 
+/** Chart- and chip-sized wording for the same reasons as DENIAL_MESSAGES. */
+export const DENIAL_LABELS: Record<DenialReason, string> = {
+  UnknownCompanyId: 'Badge not recognized',
+  Suspended: 'Suspended staff',
+  FloorNotAuthorized: 'Unauthorized floor',
+  NoFaceEnrolled: 'No face enrolled',
+  FaceMismatch: 'Face mismatch',
+  LowQuality: 'Poor capture quality',
+  SessionExpired: 'Session expired',
+  TooManyAttempts: 'Too many attempts',
+  RateLimited: 'Rate limited',
+  TerminalNotConfigured: 'Scanner not configured',
+  NotAuthorized: 'Scanner not permitted',
+  InvalidInput: 'Invalid badge code',
+};
+
 function isPostgrestError(value: unknown): value is PostgrestError {
   return typeof value === 'object' && value !== null && 'message' in value && 'code' in value;
 }

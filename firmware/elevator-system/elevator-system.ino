@@ -227,6 +227,9 @@ static uint32_t buttonChangedAt[BUTTON_COUNT];
 
 static BLECharacteristic *statusChar = nullptr;
 static bool clientConnected = false;
+// Scanner terminals (and the admin app's monitoring link) all share the BLE
+// server, so the connection count is published with the status payload.
+static volatile uint8_t bleClientCount = 0;
 static volatile bool commandPending = false;
 static char commandBuffer[256] = "";
 
@@ -842,6 +845,8 @@ static String statusJson() {
   json += sessionResult;
   json += "\",\"remaining_ms\":";
   json += String(remainingWindowMs());
+  json += ",\"clients\":";
+  json += String((unsigned)bleClientCount);
   json += ",\"emergency\":";
   json += emergencyActive ? "true" : "false";
   json += ",\"ack_id\":\"";
@@ -1194,13 +1199,24 @@ static void serviceStateMachine() {
 
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *server) override {
+    if (bleClientCount < 0xFF) {
+      bleClientCount++;
+    }
     clientConnected = true;
-    Serial.println("[ble] terminal connected");
+    Serial.print("[ble] scanner connected, clients now ");
+    Serial.println((unsigned)bleClientCount);
+    // Keep advertising after the first client so further scanners (and the
+    // admin app) can join instead of being locked out by a single link.
+    BLEDevice::startAdvertising();
   }
 
   void onDisconnect(BLEServer *server) override {
-    clientConnected = false;
-    Serial.println("[ble] terminal disconnected, advertising again");
+    if (bleClientCount > 0) {
+      bleClientCount--;
+    }
+    clientConnected = bleClientCount > 0;
+    Serial.print("[ble] scanner disconnected, clients now ");
+    Serial.println((unsigned)bleClientCount);
     BLEDevice::startAdvertising();
   }
 };

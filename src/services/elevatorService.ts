@@ -26,7 +26,12 @@ export type ElevatorStatus = {
   selectedFloor: FloorKey | null;
   sessionResult: ElevatorSessionResult;
   remainingMs: number;
+  /** BLE clients the controller currently has connected, this device included. */
+  connectedClients: number;
 };
+
+/** Bluetooth is a native-only capability; the web build reports false. */
+export const SCANNER_LINK_SUPPORTED = true;
 
 const ACK_FAILURES: Record<string, string> = {
   unauthorized: 'The elevator controller rejected this terminal. Check EXPO_PUBLIC_ELEVATOR_KEY.',
@@ -241,6 +246,7 @@ function readFloor(value: unknown): FloorKey | null {
 
 function parseStatus(payload: Record<string, unknown>): ElevatorStatus {
   const remaining = Number(payload.remaining_ms);
+  const clients = Number(payload.clients);
   return {
     state: readStateValue(payload.state),
     doorOpen: payload.door_open === true,
@@ -248,6 +254,9 @@ function parseStatus(payload: Record<string, unknown>): ElevatorStatus {
     selectedFloor: readFloor(payload.selected_floor),
     sessionResult: readSessionResult(payload.session_result),
     remainingMs: Number.isFinite(remaining) ? Math.max(0, remaining) : 0,
+    // Firmware before the multi-client build omits "clients"; treat that as
+    // "just this link".
+    connectedClients: Number.isFinite(clients) ? Math.max(0, Math.trunc(clients)) : 1,
   };
 }
 
@@ -286,6 +295,19 @@ export async function openDoorForStaff(
 export async function readElevatorStatus(): Promise<ElevatorStatus> {
   assertConfigured();
   return parseStatus(await readStatusPayload());
+}
+
+/**
+ * How many scanner terminals are on the controller's Bluetooth link right now.
+ *
+ * The controller counts every connected BLE client, and reading its status
+ * makes this admin device one of them, so the monitoring link is subtracted
+ * back out. Scanners are never registered anywhere — a phone that is connected
+ * is counted, a phone that walks away stops being counted.
+ */
+export async function readConnectedScannerCount(): Promise<number> {
+  const status = await readElevatorStatus();
+  return Math.max(0, status.connectedClients - 1);
 }
 
 export async function cancelElevatorSession(): Promise<void> {

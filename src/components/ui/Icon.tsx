@@ -46,6 +46,11 @@ export const GLYPHS = {
   torch: 'flashlight_on',
   torchOff: 'flashlight_off',
 
+  activity: 'monitoring',
+  trendUp: 'trending_up',
+  trendDown: 'trending_down',
+  bluetooth: 'bluetooth',
+
   info: 'info',
   warning: 'warning',
   error: 'error',

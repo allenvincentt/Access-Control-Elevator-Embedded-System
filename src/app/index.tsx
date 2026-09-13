@@ -1,7 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native';
 
 import { SignInScreen } from '@/app/auth/SignInScreen';
-import { Loading } from '@/components/common/Loading';
 import { HintRow } from '@/components/HintRow';
 import { AppShell } from '@/components/layout/AppShell';
 import { Screen } from '@/components/layout/Screen';
@@ -35,11 +34,7 @@ export default function Index() {
   }
 
   if (status === 'loading') {
-    return (
-      <Screen scroll={false} bottomClearance={false} contentStyle={styles.centred}>
-        <Loading label="Restoring your session…" />
-      </Screen>
-    );
+    return null;
   }
 
   return isAuthenticated ? <AppShell /> : <SignInScreen />;

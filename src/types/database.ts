@@ -160,6 +160,64 @@ export type DashboardStats = {
   attempts_24h: number;
 };
 
+export type HomeOverviewDay = {
+  /** ISO date (YYYY-MM-DD) in the requested timezone. */
+  day: string;
+  /** Short weekday label, e.g. "Mon". */
+  weekday: string;
+  attempts: number;
+  granted: number;
+  denied: number;
+};
+
+export type DenialReasonCount = {
+  reason: DenialReason;
+  count: number;
+};
+
+export type FloorTraffic = {
+  floor: FloorKey;
+  count: number;
+};
+
+export type ActivityEntry = Pick<
+  AccessLogRow,
+  | 'id'
+  | 'occurred_at'
+  | 'stage'
+  | 'decision'
+  | 'reason'
+  | 'staff_name_snapshot'
+  | 'scanned_company_id'
+  | 'floor'
+>;
+
+export type HomeOverview = {
+  generated_at: string;
+  timezone: string;
+
+  staff_total: number;
+  staff_active: number;
+  staff_suspended: number;
+  faces_enrolled: number;
+  faces_missing: number;
+
+  attempts_today: number;
+  granted_today: number;
+  denied_today: number;
+  needs_review_today: number;
+  attempts_yesterday: number;
+
+  attempts_7d: number;
+  granted_7d: number;
+  denied_7d: number;
+
+  days: HomeOverviewDay[];
+  denial_reasons: DenialReasonCount[];
+  busiest_floors: FloorTraffic[];
+  recent: ActivityEntry[];
+};
+
 export type Database = {
   public: {
     Tables: {
@@ -235,6 +293,10 @@ export type Database = {
       admin_dashboard_stats: {
         Args: Record<PropertyKey, never>;
         Returns: DashboardStats;
+      };
+      admin_home_overview: {
+        Args: { p_timezone?: string };
+        Returns: HomeOverview;
       };
       is_admin: {
         Args: Record<PropertyKey, never>;
