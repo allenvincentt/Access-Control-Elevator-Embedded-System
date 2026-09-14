@@ -4,10 +4,10 @@
     "slug": "elevator-system-mobile-app",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./src/assets/brand/brand-app-icon-v2.png",
+    "icon": "./src/assets/brand/mascot-icon-brand-red-1024.png",
     "scheme": "elevatorsystemmobileapp",
     "userInterfaceStyle": "light",
-    "backgroundColor": "#F4EFED",
+    "backgroundColor": "#FFFFFF",
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
@@ -17,7 +17,7 @@
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#B20A07",
-        "foregroundImage": "./src/assets/brand/brand-app-icon-v2.png"
+        "foregroundImage": "./src/assets/brand/mascot-icon-adaptive-foreground-1024.png"
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
@@ -28,7 +28,7 @@
     },
     "web": {
       "output": "static",
-      "favicon": "./src/assets/brand/brand-app-icon-v2.png"
+      "favicon": "./src/assets/brand/mascot-icon-brand-red-1024.png"
     },
     "plugins": [
       "expo-router",

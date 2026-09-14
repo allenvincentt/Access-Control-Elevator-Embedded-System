@@ -28,8 +28,18 @@ export type FaceCapture = {
   cropBase64: string;
 };
 
+export type FacePhoto = {
+  cropUri: string;
+  cropBase64: string;
+  geometryScore: number;
+};
+
 export type FaceCaptureOutcome =
   | { ok: true; capture: FaceCapture }
+  | { ok: false; issue: FaceQualityIssue; message: string };
+
+export type FacePhotoOutcome =
+  | { ok: true; photo: FacePhoto }
   | { ok: false; issue: FaceQualityIssue; message: string };
 
 export type FaceCaptureOptions = {
@@ -37,6 +47,73 @@ export type FaceCaptureOptions = {
   rules?: FaceSubjectRules;
   messages?: Record<FaceQualityIssue, string>;
 };
+
+export type FacePhotoOptions = FaceCaptureOptions & {
+  outputSize?: number;
+  cropMarginRatio?: number;
+};
+
+export async function captureFacePhoto(
+  photo: CapturedPhoto,
+  {
+    gates = FACE_QUALITY_GATES,
+    rules = FACE_ENROLLMENT_SUBJECT_RULES,
+    messages = FACE_ISSUE_MESSAGES,
+    outputSize = FACE_INPUT_SIZE,
+    cropMarginRatio,
+  }: FacePhotoOptions = {},
+): Promise<FacePhotoOutcome> {
+  const fail = (issue: FaceQualityIssue): FacePhotoOutcome => ({
+    ok: false,
+    issue,
+    message: messages[issue],
+  });
+
+  if (!photo?.uri || !photo.width || !photo.height) {
+    return fail('CaptureFailed');
+  }
+
+  const detection = await detectSingleFace(photo.uri, photo.width, photo.height, gates, rules);
+  if (!detection.ok) {
+    return fail(detection.issue);
+  }
+
+  const rect = faceCropRect(
+    detection.detected.face,
+    photo.width,
+    photo.height,
+    cropMarginRatio ?? gates.cropMarginRatio,
+  );
+  if (rect.width < 24 || rect.height < 24) {
+    return fail('FaceTooSmall');
+  }
+
+  try {
+    const context = ImageManipulator.manipulate(photo.uri);
+    context.crop(rect).resize({ width: outputSize, height: outputSize });
+    const rendered = await context.renderAsync();
+    const saved = await rendered.saveAsync({
+      format: SaveFormat.JPEG,
+      compress: 1,
+      base64: true,
+    });
+    release(rendered);
+    release(context);
+    if (!saved.base64) {
+      return fail('CaptureFailed');
+    }
+    return {
+      ok: true,
+      photo: {
+        cropUri: saved.uri,
+        cropBase64: saved.base64,
+        geometryScore: detection.detected.geometryScore,
+      },
+    };
+  } catch {
+    return fail('CaptureFailed');
+  }
+}
 
 export async function captureFaceFromPhoto(
   photo: CapturedPhoto,
@@ -52,41 +129,12 @@ export async function captureFaceFromPhoto(
     message: messages[issue],
   });
 
-  if (!photo?.uri || !photo.width || !photo.height) {
-    return fail('CaptureFailed');
+  const cropped = await captureFacePhoto(photo, { gates, rules, messages });
+  if (!cropped.ok) {
+    return { ok: false, issue: cropped.issue, message: cropped.message };
   }
 
-  const detection = await detectSingleFace(photo.uri, photo.width, photo.height, gates, rules);
-  if (!detection.ok) {
-    return fail(detection.issue);
-  }
-
-  const rect = faceCropRect(detection.detected.face, photo.width, photo.height, gates.cropMarginRatio);
-  if (rect.width < 24 || rect.height < 24) {
-    return fail('FaceTooSmall');
-  }
-
-  let cropUri: string;
-  let cropBase64: string;
-  try {
-    const context = ImageManipulator.manipulate(photo.uri);
-    context.crop(rect).resize({ width: FACE_INPUT_SIZE, height: FACE_INPUT_SIZE });
-    const rendered = await context.renderAsync();
-    const saved = await rendered.saveAsync({
-      format: SaveFormat.JPEG,
-      compress: 1,
-      base64: true,
-    });
-    release(rendered);
-    release(context);
-    if (!saved.base64) {
-      return fail('CaptureFailed');
-    }
-    cropUri = saved.uri;
-    cropBase64 = saved.base64;
-  } catch {
-    return fail('CaptureFailed');
-  }
+  const { cropUri, cropBase64, geometryScore } = cropped.photo;
 
   let rgba: Uint8Array;
   try {
@@ -123,7 +171,7 @@ export async function captureFaceFromPhoto(
   const sharpnessScore = Math.min(1, image.sharpness / gates.targetSharpness);
   const lightingScore = 1 - Math.min(1, Math.abs(image.meanLuma - 132) / 100);
   const quality = round4(
-    clamp01(detection.detected.geometryScore * 0.5 + lightingScore * 0.25 + sharpnessScore * 0.25),
+    clamp01(geometryScore * 0.5 + lightingScore * 0.25 + sharpnessScore * 0.25),
   );
 
   return { ok: true, capture: { embedding, quality, cropUri, cropBase64 } };

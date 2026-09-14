@@ -43,6 +43,24 @@ export async function uploadStaffPhoto(staffId: string, base64Jpeg: string): Pro
   return path;
 }
 
+export async function uploadGuestCapture(base64Jpeg: string): Promise<string | null> {
+  try {
+    const bytes = decodeBase64(base64Jpeg);
+    if (bytes.byteLength > 5 * 1024 * 1024) return null;
+
+    const path = `guest/${Crypto.randomUUID()}.jpg`;
+    const { error } = await supabase.storage.from(BUCKET).upload(path, bytes, {
+      contentType: 'image/jpeg',
+      cacheControl: '3600',
+      upsert: false,
+    });
+
+    return error ? null : path;
+  } catch {
+    return null;
+  }
+}
+
 export async function removeStaffPhoto(path: string | null | undefined): Promise<void> {
   if (!path) return;
   const { error } = await supabase.storage.from(BUCKET).remove([path]);

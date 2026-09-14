@@ -19,7 +19,8 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { Icon, type IconName } from '@/components/ui/Icon';
-import { colors, radius, spacing, typography } from '@/constants/themeColor';
+import { colors, fontFamily, radius, spacing, typography } from '@/constants/themeColor';
+import { useShake } from '@/hooks/useShake';
 
 const LABEL_TIMING = { duration: 160, easing: Easing.out(Easing.cubic) };
 
@@ -32,6 +33,7 @@ export type InputProps = Omit<TextInputProps, 'style' | 'placeholder'> & {
   type?: FieldType;
   icon?: IconName;
   error?: string | null;
+  errorSignal?: number | string;
   helperText?: string;
   optional?: boolean;
   containerStyle?: StyleProp<ViewStyle>;
@@ -62,6 +64,7 @@ export const Input = forwardRef<TextInput, InputProps>(function Input(
     type = 'text',
     icon,
     error,
+    errorSignal,
     helperText,
     optional = false,
     containerStyle,
@@ -82,6 +85,7 @@ export const Input = forwardRef<TextInput, InputProps>(function Input(
   const isPassword = type === 'password';
   const floating = focused || value.length > 0;
   const hasError = Boolean(error);
+  const shakeStyle = useShake(hasError ? `${errorSignal ?? ''}|${error}` : null);
 
   const float = useSharedValue(floating ? 1 : 0);
   const focus = useSharedValue(focused ? 1 : 0);
@@ -132,6 +136,7 @@ export const Input = forwardRef<TextInput, InputProps>(function Input(
             hasError && styles.fieldError,
             !editable && styles.fieldDisabled,
             fieldAnimStyle,
+            shakeStyle,
           ]}
         >
         {icon ? (
@@ -245,7 +250,8 @@ const styles = StyleSheet.create({
     left: 0,
   },
   labelBase: {
-    fontWeight: '700',
+    fontFamily: fontFamily.semibold,
+    fontWeight: '600',
   },
   input: {
     color: colors.text,

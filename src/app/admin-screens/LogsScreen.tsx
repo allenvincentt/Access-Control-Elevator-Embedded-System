@@ -1,18 +1,36 @@
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  useWindowDimensions,
+  View,
+} from "react-native";
 
 import { Skeleton } from "@/components/common/SkeletonLoader";
 import { HintRow } from "@/components/HintRow";
 import { Screen } from "@/components/layout/Screen";
 import { ScreenHeader } from "@/components/layout/ScreenHeader";
+import { Avatar } from "@/components/ui/Avatar";
 import { GeneralButton } from "@/components/ui/buttons/GeneralButton";
 import { Card } from "@/components/ui/Card";
-import { Chip } from "@/components/ui/Chip";
 import { Icon } from "@/components/ui/Icon";
-import { floorShortLabel } from "@/constants/floors";
-import { colors, radius, spacing, typography } from "@/constants/themeColor";
+import { floorShortLabel, staffRoleLabel } from "@/constants/floors";
+import {
+  colors,
+  fontFamily,
+  radius,
+  shadow,
+  spacing,
+  typography,
+} from "@/constants/themeColor";
 import { useAccessLogs, type LogDecisionFilter } from "@/hooks/useAccessLogs";
-import { DENIAL_MESSAGES } from "@/lib/errors";
-import type { AccessLogRow } from "@/types/database";
+import { DENIAL_LABELS, DENIAL_MESSAGES } from "@/lib/errors";
+import type {
+  AccessAttempt,
+  AttemptBadge,
+  AttemptOutcome,
+} from "@/services/logsService";
 
 const FILTERS: { key: LogDecisionFilter; label: string }[] = [
   { key: "all", label: "All" },
@@ -20,66 +38,221 @@ const FILTERS: { key: LogDecisionFilter; label: string }[] = [
   { key: "Denied", label: "Denied" },
 ];
 
-function formatTimestamp(value: string) {
-  const date = new Date(value);
-  return date.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+const OUTCOME_TONE: Record<
+  AttemptOutcome,
+  { bg: string; fg: string; label: string }
+> = {
+  Granted: { bg: colors.successTint, fg: colors.success, label: "Granted" },
+  Denied: { bg: colors.dangerTint, fg: colors.danger, label: "Denied" },
+  Incomplete: {
+    bg: colors.surfaceSunken,
+    fg: colors.textSecondary,
+    label: "Incomplete",
+  },
+};
+
+const TIME_FORMAT: Intl.DateTimeFormatOptions = {
+  hour: "numeric",
+  minute: "2-digit",
+};
+
+function formatDay(date: Date) {
+  const today = new Date();
+  const midnight = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate(),
+  );
+  const days = Math.floor((midnight.getTime() - date.getTime()) / 86_400_000);
+
+  if (days < 0) return "Today";
+  if (days === 0) return "Yesterday";
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function LogEntry({ log, index = 0 }: { log: AccessLogRow; index?: number }) {
-  const granted = log.decision === "Granted";
-  const finalGrant = granted && log.stage === "Face";
+function formatTime(date: Date) {
+  return date.toLocaleTimeString(undefined, TIME_FORMAT);
+}
+
+function personName(attempt: AccessAttempt) {
+  return attempt.staffName ?? `Badge ${attempt.companyId}`;
+}
+
+function scoreLabel(score: number | null) {
+  return score == null ? null : `${Math.round(score * 100)}%`;
+}
+
+function PersonBadge({
+  attempt,
+  badge,
+  photoUrl,
+  compact = false,
+}: {
+  attempt: AccessAttempt;
+  badge?: AttemptBadge;
+  photoUrl?: string;
+  compact?: boolean;
+}) {
+  return (
+    <View style={styles.person}>
+      <Avatar
+        name={attempt.staffName ?? ""}
+        imageUri={photoUrl}
+        size={compact ? 40 : 38}
+        tone={badge?.role === "Guest" ? "gold" : "neutral"}
+      />
+      <View style={styles.personText}>
+        <Text style={styles.personName} numberOfLines={1}>
+          {personName(attempt)}
+        </Text>
+        <Text style={styles.personBadgeId} numberOfLines={1}>
+          {attempt.companyId}
+        </Text>
+        <Text style={styles.personRole} numberOfLines={1}>
+          {badge ? staffRoleLabel(badge.role) : "Unregistered badge"}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function OutcomePill({ outcome }: { outcome: AttemptOutcome }) {
+  const tone = OUTCOME_TONE[outcome];
+  return (
+    <View style={[styles.pill, { backgroundColor: tone.bg }]}>
+      <Text style={[styles.pillText, { color: tone.fg }]}>{tone.label}</Text>
+    </View>
+  );
+}
+
+function StageLines({ attempt }: { attempt: AccessAttempt }) {
+  const score = scoreLabel(attempt.face?.match_score ?? null);
 
   return (
-    <Card padding="base" reveal revealDelay={Math.min(index, 8) * 60}>
-      <View style={styles.entryTop}>
-        <View
+    <View style={styles.stages}>
+      <View style={styles.stageLine}>
+        <Text style={styles.stageLabel}>Barcode:</Text>
+        <Text
           style={[
-            styles.badge,
-            granted ? styles.badgeGranted : styles.badgeDenied,
+            styles.stageValue,
+            {
+              color:
+                attempt.barcode?.decision === "Granted"
+                  ? colors.success
+                  : attempt.barcode
+                    ? colors.danger
+                    : colors.textMuted,
+            },
           ]}
         >
-          <Icon
-            name={granted ? "checkCircle" : "lock"}
-            size={18}
-            color={granted ? colors.success : colors.danger}
-          />
-        </View>
-        <View style={styles.entryIdentity}>
-          <Text style={styles.entryName} numberOfLines={1}>
-            {log.staff_name_snapshot ?? "Unknown badge"}
-          </Text>
-          <Text style={styles.entryMeta} numberOfLines={1}>
-            {log.scanned_company_id}
-            {log.floor ? ` · ${floorShortLabel(log.floor)}` : ""}
-          </Text>
-        </View>
-        <Text style={styles.entryTime}>{formatTimestamp(log.occurred_at)}</Text>
+          {attempt.barcode?.decision ?? "—"}
+        </Text>
       </View>
+      <View style={styles.stageLine}>
+        <Text style={styles.stageLabel}>Face:</Text>
+        <Text
+          style={[
+            styles.stageValue,
+            {
+              color:
+                attempt.face?.decision === "Granted"
+                  ? colors.success
+                  : attempt.face
+                    ? colors.danger
+                    : colors.textMuted,
+            },
+          ]}
+        >
+          {attempt.face?.decision ?? "Not reached"}
+        </Text>
+        {score ? <Text style={styles.stageScore}>· {score}</Text> : null}
+      </View>
+    </View>
+  );
+}
 
-      <View style={styles.entryChips}>
-        <Chip label={log.stage} tone="neutral" size="sm" />
-        <Chip
-          label={finalGrant ? "Access granted" : granted ? "Passed" : "Denied"}
-          tone={granted ? "success" : "danger"}
-          size="sm"
-        />
-        {log.match_score != null ? (
-          <Chip
-            label={`Match ${(log.match_score * 100).toFixed(1)}%`}
-            tone="info"
-            size="sm"
-          />
+function DenialReason({ attempt }: { attempt: AccessAttempt }) {
+  if (!attempt.reason) {
+    return <Text style={styles.noReason}>—</Text>;
+  }
+  return (
+    <View style={styles.reason}>
+      <Text style={styles.reasonTitle}>{DENIAL_LABELS[attempt.reason]}</Text>
+      <Text style={styles.reasonBody}>{DENIAL_MESSAGES[attempt.reason]}</Text>
+    </View>
+  );
+}
+
+function AttemptRow({
+  attempt,
+  badge,
+  photoUrl,
+}: {
+  attempt: AccessAttempt;
+  badge?: AttemptBadge;
+  photoUrl?: string;
+}) {
+  const at = new Date(attempt.occurredAt);
+
+  return (
+    <View style={styles.tRow}>
+      <View style={[styles.tCell, styles.colPerson]}>
+        <PersonBadge attempt={attempt} badge={badge} photoUrl={photoUrl} />
+      </View>
+      <View style={[styles.tCell, styles.colWhen]}>
+        <Text style={styles.whenDay}>{formatDay(at)}</Text>
+        <Text style={styles.whenTime}>{formatTime(at)}</Text>
+      </View>
+      <View style={[styles.tCell, styles.colOutcome]}>
+        <OutcomePill outcome={attempt.outcome} />
+        <StageLines attempt={attempt} />
+        {attempt.floor ? (
+          <Text style={styles.floorNote}>{floorShortLabel(attempt.floor)}</Text>
         ) : null}
       </View>
+      <View style={[styles.tCell, styles.colReason]}>
+        <DenialReason attempt={attempt} />
+      </View>
+    </View>
+  );
+}
 
-      {log.reason ? (
-        <Text style={styles.entryReason}>{DENIAL_MESSAGES[log.reason]}</Text>
+function AttemptCard({
+  attempt,
+  badge,
+  photoUrl,
+  index,
+}: {
+  attempt: AccessAttempt;
+  badge?: AttemptBadge;
+  photoUrl?: string;
+  index: number;
+}) {
+  const at = new Date(attempt.occurredAt);
+
+  return (
+    <Card padding="base" reveal revealDelay={Math.min(index, 8) * 50}>
+      <View style={styles.cardTop}>
+        <PersonBadge attempt={attempt} badge={badge} photoUrl={photoUrl} compact />
+        <OutcomePill outcome={attempt.outcome} />
+      </View>
+
+      <View style={styles.cardMeta}>
+        <Icon name="time" size={13} color={colors.textMuted} />
+        <Text style={styles.cardMetaText}>
+          {formatDay(at)} · {formatTime(at)}
+          {attempt.floor ? ` · ${floorShortLabel(attempt.floor)}` : ""}
+        </Text>
+      </View>
+
+      <View style={styles.cardStages}>
+        <StageLines attempt={attempt} />
+      </View>
+
+      {attempt.reason ? (
+        <View style={styles.cardReason}>
+          <DenialReason attempt={attempt} />
+        </View>
       ) : null}
     </Card>
   );
@@ -87,7 +260,9 @@ function LogEntry({ log, index = 0 }: { log: AccessLogRow; index?: number }) {
 
 export function LogsScreen() {
   const {
-    rows,
+    attempts,
+    badges,
+    photoUrls,
     total,
     loading,
     refreshing,
@@ -102,60 +277,84 @@ export function LogsScreen() {
     loadMore,
   } = useAccessLogs();
 
+  const { width } = useWindowDimensions();
+  const wide = width >= 900;
+
+  const photoFor = (badge?: AttemptBadge) =>
+    badge?.photoPath ? photoUrls[badge.photoPath] : undefined;
+
   return (
     <Screen
       refreshing={refreshing}
       onRefresh={() => void refresh()}
-      header={<ScreenHeader overline="Activity" title="Logs" />}
+      header={
+        <ScreenHeader
+          overline="Activity"
+          title="Access Logs"
+          subtitle="Full history of every badge scan and face verification attempt"
+        />
+      }
     >
-      <View style={styles.searchField}>
-        <Icon name="search" size={18} color={colors.textMuted} />
-        <View style={styles.searchInputWrap}>
-          <TextInput
-            value={search}
-            onChangeText={setSearch}
-            placeholder="Search by company ID"
-            placeholderTextColor={colors.textMuted}
-            style={styles.searchInput}
-            autoCapitalize="characters"
-            autoCorrect={false}
-            returnKeyType="search"
-            accessibilityLabel="Search access logs"
-            cursorColor={colors.primary}
-            selectionColor={colors.focusRing}
-          />
-        </View>
-        {search.length > 0 ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Clear search"
-            hitSlop={8}
-            onPress={() => setSearch("")}
-          >
-            <Icon name="close" size={16} color={colors.textSecondary} />
-          </Pressable>
-        ) : null}
-      </View>
-
-      <View style={styles.filterRow}>
-        {FILTERS.map((filter) => {
-          const active = decision === filter.key;
-          return (
+      <View style={[styles.controls, wide && styles.controlsWide]}>
+        <View style={[styles.searchField, wide && styles.searchFieldWide]}>
+          <Icon name="search" size={18} color={colors.textMuted} />
+          <View style={styles.searchInputWrap}>
+            <TextInput
+              value={search}
+              onChangeText={setSearch}
+              placeholder="Search by company ID"
+              placeholderTextColor={colors.textMuted}
+              style={styles.searchInput}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              returnKeyType="search"
+              accessibilityLabel="Search access logs"
+              cursorColor={colors.primary}
+              selectionColor={colors.focusRing}
+            />
+          </View>
+          {search.length > 0 ? (
             <Pressable
-              key={filter.key}
               accessibilityRole="button"
-              accessibilityState={{ selected: active }}
-              onPress={() => setDecision(filter.key)}
-              style={[styles.filterChip, active && styles.filterChipActive]}
+              accessibilityLabel="Clear search"
+              hitSlop={8}
+              onPress={() => setSearch("")}
             >
-              <Text
-                style={[styles.filterLabel, active && styles.filterLabelActive]}
-              >
-                {filter.label}
-              </Text>
+              <Icon name="close" size={16} color={colors.textSecondary} />
             </Pressable>
-          );
-        })}
+          ) : null}
+        </View>
+
+        <View style={styles.filterRow}>
+          <View style={styles.segmented}>
+            {FILTERS.map((filter) => {
+              const active = decision === filter.key;
+              return (
+                <Pressable
+                  key={filter.key}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  onPress={() => setDecision(filter.key)}
+                  style={[styles.segment, active && styles.segmentActive]}
+                >
+                  <Text
+                    style={[
+                      styles.segmentLabel,
+                      active && styles.segmentLabelActive,
+                    ]}
+                  >
+                    {filter.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          {loading ? null : (
+            <Text style={styles.resultCount}>
+              {total} result{total === 1 ? "" : "s"}
+            </Text>
+          )}
+        </View>
       </View>
 
       {error ? (
@@ -167,23 +366,62 @@ export function LogsScreen() {
       {loading ? (
         <View style={styles.list}>
           {[0, 1, 2, 3].map((key) => (
-            <Skeleton key={key} height={116} rounded="lg" />
+            <Skeleton key={key} height={wide ? 84 : 150} rounded="lg" />
           ))}
         </View>
-      ) : rows.length === 0 ? (
+      ) : attempts.length === 0 ? (
         <View style={styles.empty}>
           <View style={styles.emptyIcon}>
             <Icon name="logs" size={26} color={colors.textMuted} />
           </View>
-          <Text style={styles.emptyTitle}>No access attempts yet</Text>
-          <Text style={styles.emptyBody}>
-            Every barcode scan and face check from the scanner is recorded here.
+          <Text style={styles.emptyTitle}>
+            {search || decision !== "all"
+              ? "No attempts match your filters"
+              : "No access attempts yet"}
           </Text>
+          <Text style={styles.emptyBody}>
+            {search || decision !== "all"
+              ? "Try a different company ID or clear the outcome filter."
+              : "Every badge scan and face check from the scanner is recorded here."}
+          </Text>
+        </View>
+      ) : wide ? (
+        <View style={styles.table}>
+          <View style={styles.tHeader}>
+            <Text style={[styles.tHeaderText, styles.colPerson]}>
+              Person / Badge
+            </Text>
+            <Text style={[styles.tHeaderText, styles.colWhen]}>Date & Time</Text>
+            <Text style={[styles.tHeaderText, styles.colOutcome]}>Outcome</Text>
+            <Text style={[styles.tHeaderText, styles.colReason]}>
+              Denial Reason
+            </Text>
+          </View>
+          {attempts.map((attempt, index) => (
+            <View key={attempt.key}>
+              {index > 0 ? <View style={styles.tDivider} /> : null}
+              <AttemptRow
+                attempt={attempt}
+                badge={attempt.staffId ? badges[attempt.staffId] : undefined}
+                photoUrl={photoFor(
+                  attempt.staffId ? badges[attempt.staffId] : undefined,
+                )}
+              />
+            </View>
+          ))}
         </View>
       ) : (
         <View style={styles.list}>
-          {rows.map((log, index) => (
-            <LogEntry key={log.id} log={log} index={index} />
+          {attempts.map((attempt, index) => (
+            <AttemptCard
+              key={attempt.key}
+              attempt={attempt}
+              index={index}
+              badge={attempt.staffId ? badges[attempt.staffId] : undefined}
+              photoUrl={photoFor(
+                attempt.staffId ? badges[attempt.staffId] : undefined,
+              )}
+            />
           ))}
         </View>
       )}
@@ -203,19 +441,33 @@ export function LogsScreen() {
 }
 
 const styles = StyleSheet.create({
+  controls: {
+    gap: spacing.md,
+  },
+  controlsWide: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.base,
+  },
   searchField: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
-    height: 50,
+    height: 46,
     paddingHorizontal: spacing.base,
     borderRadius: radius.lg,
     borderWidth: 1.5,
     borderColor: colors.border,
     backgroundColor: colors.surface,
   },
+  searchFieldWide: {
+    flex: 1,
+    maxWidth: 380,
+  },
   searchInputWrap: {
     flex: 1,
+    minWidth: 0,
   },
   searchInput: {
     color: colors.text,
@@ -224,76 +476,204 @@ const styles = StyleSheet.create({
   },
   filterRow: {
     flexDirection: "row",
-    gap: spacing.sm,
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: spacing.md,
   },
-  filterChip: {
-    paddingHorizontal: spacing.base,
-    paddingVertical: spacing.sm,
+  segmented: {
+    flexDirection: "row",
+    padding: 3,
     borderRadius: radius.pill,
-    borderWidth: 1.5,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceSunken,
   },
-  filterChipActive: {
-    borderColor: colors.primary,
-    backgroundColor: colors.primaryTint,
+  segment: {
+    paddingHorizontal: spacing.base,
+    paddingVertical: spacing.sm - 2,
+    borderRadius: radius.pill,
   },
-  filterLabel: {
+  segmentActive: {
+    backgroundColor: colors.primary,
+    ...shadow.sm,
+  },
+  segmentLabel: {
     ...typography.label,
     color: colors.textSecondary,
   },
-  filterLabelActive: {
-    color: colors.primaryDeep,
+  segmentLabelActive: {
+    color: colors.onPrimary,
+  },
+  resultCount: {
+    ...typography.caption,
+    color: colors.textMuted,
   },
   list: {
     gap: spacing.md,
   },
-  entryTop: {
+
+  person: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
-  },
-  badge: {
-    width: 38,
-    height: 38,
-    borderRadius: radius.md,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  badgeGranted: {
-    backgroundColor: colors.successTint,
-  },
-  badgeDenied: {
-    backgroundColor: colors.dangerTint,
-  },
-  entryIdentity: {
     flex: 1,
-    gap: 2,
+    minWidth: 0,
   },
-  entryName: {
+  personText: {
+    flex: 1,
+    minWidth: 0,
+    gap: 1,
+  },
+  personName: {
     color: colors.text,
     ...typography.bodyStrong,
+    fontFamily: fontFamily.bold,
+    fontWeight: "700",
   },
-  entryMeta: {
+  personBadgeId: {
     color: colors.textSecondary,
-    ...typography.caption,
+    ...typography.mono,
+    fontSize: 12,
+    lineHeight: 16,
   },
-  entryTime: {
+  personRole: {
     color: colors.textMuted,
     ...typography.caption,
   },
-  entryChips: {
+
+  pill: {
+    alignSelf: "flex-start",
+    paddingHorizontal: spacing.md,
+    paddingVertical: 3,
+    borderRadius: radius.pill,
+  },
+  pillText: {
+    ...typography.caption,
+    fontFamily: fontFamily.bold,
+    fontWeight: "700",
+  },
+  stages: {
+    gap: 2,
+  },
+  stageLine: {
     flexDirection: "row",
-    flexWrap: "wrap",
+    alignItems: "center",
+    gap: spacing.xs,
+  },
+  stageLabel: {
+    color: colors.textMuted,
+    ...typography.caption,
+    width: 54,
+  },
+  stageValue: {
+    ...typography.caption,
+    fontFamily: fontFamily.bold,
+    fontWeight: "700",
+  },
+  stageScore: {
+    color: colors.textMuted,
+    ...typography.caption,
+  },
+  floorNote: {
+    color: colors.textMuted,
+    ...typography.caption,
+  },
+
+  reason: {
+    gap: 2,
+  },
+  reasonTitle: {
+    color: colors.warning,
+    ...typography.label,
+  },
+  reasonBody: {
+    color: colors.textSecondary,
+    ...typography.caption,
+    lineHeight: 16,
+  },
+  noReason: {
+    color: colors.textMuted,
+    ...typography.body,
+  },
+
+  table: {
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    overflow: "hidden",
+    ...shadow.sm,
+  },
+  tHeader: {
+    flexDirection: "row",
+    paddingHorizontal: spacing.base,
+    paddingVertical: spacing.md,
+    backgroundColor: colors.surfaceAlt,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  tHeaderText: {
+    ...typography.overline,
+    color: colors.textMuted,
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+  },
+  tRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    paddingHorizontal: spacing.base,
+    paddingVertical: spacing.md,
+  },
+  tDivider: {
+    height: 1,
+    backgroundColor: colors.border,
+  },
+  tCell: {
+    paddingRight: spacing.md,
+    justifyContent: "center",
+    minWidth: 0,
+  },
+  colPerson: { flex: 3, flexDirection: "row", alignItems: "center" },
+  colWhen: { flex: 1.6, gap: 2 },
+  colOutcome: { flex: 1.9, gap: spacing.xs },
+  colReason: { flex: 2.4, paddingRight: 0 },
+  whenDay: {
+    color: colors.text,
+    ...typography.bodyStrong,
+  },
+  whenTime: {
+    color: colors.textSecondary,
+    ...typography.caption,
+    fontVariant: ["tabular-nums"],
+  },
+
+  cardTop: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.md,
+  },
+  cardMeta: {
+    flexDirection: "row",
+    alignItems: "center",
     gap: spacing.xs,
     marginTop: spacing.md,
   },
-  entryReason: {
-    marginTop: spacing.sm,
+  cardMetaText: {
+    flex: 1,
     color: colors.textSecondary,
     ...typography.caption,
-    lineHeight: 17,
   },
+  cardStages: {
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  cardReason: {
+    marginTop: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: radius.sm,
+    backgroundColor: colors.warningTint,
+  },
+
   empty: {
     marginTop: spacing["3xl"],
     alignItems: "center",

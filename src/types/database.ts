@@ -1,8 +1,9 @@
-import type { AccessStatus, AuthorizedFloor } from '@/enums/staffEnum';
+import type { AccessStatus, AuthorizedFloor, StaffRole } from '@/enums/staffEnum';
 import type { UserRole } from '@/enums/userRoleEnum';
 
 export type FloorKey = keyof typeof AuthorizedFloor;
 export type AccessStatusKey = keyof typeof AccessStatus;
+export type StaffRoleKey = keyof typeof StaffRole;
 export type UserRoleKey = keyof typeof UserRole;
 
 export type AccessStage = 'Barcode' | 'Face';
@@ -37,6 +38,7 @@ export type StaffRow = {
   full_name: string;
   email: string;
   company_id: string;
+  role: StaffRoleKey;
   authorized_floors: FloorKey[];
   access_status: AccessStatusKey;
   photo_path: string | null;
@@ -53,6 +55,7 @@ export type StaffInsert = {
   full_name: string;
   email: string;
   company_id: string;
+  role: StaffRoleKey;
   authorized_floors: FloorKey[];
   access_status: AccessStatusKey;
   photo_path?: string | null;
@@ -60,6 +63,7 @@ export type StaffInsert = {
 
 export type StaffUpdate = {
   company_id?: string;
+  role?: StaffRoleKey;
   authorized_floors?: FloorKey[];
   access_status?: AccessStatusKey;
   photo_path?: string | null;
@@ -103,18 +107,24 @@ export type FaceSamplePayload = {
   quality: number;
 };
 
+export type VerifiedStaffSummary = {
+  full_name: string;
+  company_id: string;
+  role: StaffRoleKey;
+};
+
 export type BarcodeVerificationResult =
   | {
       ok: true;
       session_token: string;
       expires_at: string;
-      staff: { full_name: string; company_id: string };
+      staff: VerifiedStaffSummary;
     }
   | {
       ok: false;
       reason: DenialReason;
       retry_after_seconds?: number;
-      staff?: { full_name: string; company_id: string };
+      staff?: VerifiedStaffSummary;
     };
 
 export type FaceVerificationResult =
@@ -122,7 +132,7 @@ export type FaceVerificationResult =
       ok: true;
       authorized_floors: FloorKey[];
       score?: number;
-      staff: { full_name: string; company_id: string };
+      staff: VerifiedStaffSummary;
     }
   | {
       ok: false;
@@ -130,11 +140,12 @@ export type FaceVerificationResult =
       attempts_left?: number;
     };
 
+
 export type FloorAccessResult =
   | {
       ok: true;
       floor: FloorKey;
-      staff: { full_name: string; company_id: string };
+      staff: VerifiedStaffSummary;
     }
   | {
       ok: false;
@@ -269,6 +280,10 @@ export type Database = {
         Args: { p_session_token: string };
         Returns: undefined;
       };
+      record_guest_face: {
+        Args: { p_session_token: string; p_photo_path: string | null; p_device_id: string };
+        Returns: FaceVerificationResult;
+      };
       enroll_staff_face: {
         Args: { p_staff_id: string; p_samples: FaceSamplePayload[]; p_model_version?: string };
         Returns: EnrollmentResult;
@@ -287,6 +302,7 @@ export type Database = {
           p_photo_path: string | null;
           p_samples: FaceSamplePayload[];
           p_model_version?: string;
+          p_role?: StaffRoleKey;
         };
         Returns: StaffRow;
       };
@@ -307,6 +323,7 @@ export type Database = {
       user_role: UserRoleKey;
       authorized_floor: FloorKey;
       active_status: AccessStatusKey;
+      staff_role: StaffRoleKey;
       access_stage: AccessStage;
       access_decision: AccessDecision;
       denial_reason: DenialReason;

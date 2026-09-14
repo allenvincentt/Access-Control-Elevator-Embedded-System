@@ -3,7 +3,7 @@ import { StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import Svg, { Circle, Defs, LinearGradient, Path, Stop } from 'react-native-svg';
 
 import { useAnimatedNumber } from '@/components/common/animations';
-import { colors, palette, typography } from '@/constants/themeColor';
+import { colors, fontFamily, palette, typography } from '@/constants/themeColor';
 
 export type TrendChartProps = {
   points: number[];
@@ -167,6 +167,7 @@ const styles = StyleSheet.create({
   },
   labelActive: {
     color: colors.textSecondary,
+    fontFamily: fontFamily.bold,
     fontWeight: '700',
   },
 });

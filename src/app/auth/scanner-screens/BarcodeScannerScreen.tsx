@@ -14,6 +14,7 @@ import { ScannerScaffold } from "@/components/scanner/ScannerScaffold";
 import { GeneralButton } from "@/components/ui/buttons/GeneralButton";
 import { Icon } from "@/components/ui/Icon";
 import { Input } from "@/components/ui/Input";
+import { ShakeView } from "@/components/ui/ShakeView";
 import { colors, spacing, typography } from "@/constants/themeColor";
 import { getDeviceId } from "@/lib/deviceId";
 import { DENIAL_MESSAGES, errorMessage } from "@/lib/errors";
@@ -25,6 +26,7 @@ export type BarcodeScannerScreenProps = {
 };
 
 const RESCAN_COOLDOWN_MS = 1500;
+const DENIAL_HOLD_MS = 2600;
 
 const CAPTIONS: Record<ScannerStatus, string> = {
   idle: "Point the camera at your access barcode",
@@ -54,16 +56,29 @@ export function BarcodeScannerScreen({
 
   const lastScan = useRef<{ code: string; at: number } | null>(null);
   const mounted = useRef(true);
+  const rearmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      if (rearmTimer.current) clearTimeout(rearmTimer.current);
     };
+  }, []);
+
+  const rearmAfterDenial = useCallback(() => {
+    if (rearmTimer.current) clearTimeout(rearmTimer.current);
+    rearmTimer.current = setTimeout(() => {
+      if (!mounted.current) return;
+      lastScan.current = null;
+      setDenial(null);
+      setStatus("scanning");
+    }, DENIAL_HOLD_MS);
   }, []);
 
   const runVerification = useCallback(
     async (raw: string) => {
+      if (rearmTimer.current) clearTimeout(rearmTimer.current);
       setStatus("verifying");
       setDenial(null);
 
@@ -84,6 +99,7 @@ export function BarcodeScannerScreen({
               expiresAt: result.expires_at,
               staffName: result.staff.full_name,
               companyId: result.staff.company_id,
+              role: result.staff.role,
             });
           }, 600);
           return;
@@ -93,6 +109,7 @@ export function BarcodeScannerScreen({
         setAttempts((count) => count + 1);
         setDenial(DENIAL_MESSAGES[result.reason]);
         snackbar.show(DENIAL_MESSAGES[result.reason], { variant: "error" });
+        rearmAfterDenial();
       } catch (error) {
         if (!mounted.current) return;
         setStatus("error");
@@ -103,9 +120,10 @@ export function BarcodeScannerScreen({
         );
         setDenial(message);
         snackbar.show(message, { variant: "error" });
+        rearmAfterDenial();
       }
     },
-    [onVerified, snackbar],
+    [onVerified, rearmAfterDenial, snackbar],
   );
 
   const handleScan = useCallback(
@@ -126,13 +144,6 @@ export function BarcodeScannerScreen({
     },
     [runVerification, status],
   );
-
-  const reset = useCallback(() => {
-    setDenial(null);
-    setManualOpen(false);
-    setManualCode("");
-    setStatus("scanning");
-  }, []);
 
   const hint = HINTS[Math.min(attempts, HINTS.length - 1)];
 
@@ -179,94 +190,93 @@ export function BarcodeScannerScreen({
           </>
         }
         panel={
-          status === "error" ? (
-            <>
-              <View style={styles.panelHead}>
-                <Icon name="error" size={20} color={colors.danger} />
-                <Text style={styles.panelTitle}>Access denied</Text>
-              </View>
-              <HintRow tone="danger" title="Why">
-                {denial ?? "That badge could not be verified."}
-              </HintRow>
-              <HintRow tone="warning" title="Helpful hint">
-                {hint}
-              </HintRow>
-              <GeneralButton
-                label="Scan again"
-                icon="refresh"
-                fullWidth
-                onPress={reset}
-              />
-            </>
-          ) : status === "success" ? (
-            <>
-              <View style={styles.panelHead}>
-                <Icon name="checkCircle" size={20} color={colors.success} />
-                <Text style={styles.panelTitle}>Barcode verified</Text>
-              </View>
-              <Text style={styles.panelBody}>
-                Continuing to face verification…
-              </Text>
-            </>
-          ) : (
-            <>
-              <View style={styles.panelHead}>
-                <Icon name="qr" size={20} color={colors.primary} />
-                <Text style={styles.panelTitle}>
-                  {status === "verifying" ? "Verifying…" : "Ready to scan"}
-                </Text>
-              </View>
-              <Text style={styles.panelBody}>
-                Keep the barcode flat and centred. Verification starts
-                automatically.
-              </Text>
-
-              {manualOpen ? (
-                <View style={styles.manual}>
-                  <Input
-                    label="Company ID"
-                    icon="badge"
-                    value={manualCode}
-                    onChangeText={(text) => setManualCode(text.toUpperCase())}
-                    autoCapitalize="characters"
-                    autoCorrect={false}
-                    editable={status !== "verifying"}
-                    returnKeyType="go"
-                    onSubmitEditing={() => void runVerification(manualCode)}
-                  />
-                  <View style={styles.manualRow}>
-                    <GeneralButton
-                      label="Cancel"
-                      size="sm"
-                      variant="ghost"
-                      onPress={() => setManualOpen(false)}
-                      style={styles.manualBtn}
-                      disabled={status === "verifying"}
-                    />
-                    <GeneralButton
-                      label="Verify"
-                      size="sm"
-                      icon="check"
-                      onPress={() => void runVerification(manualCode)}
-                      style={styles.manualBtn}
-                      disabled={
-                        status === "verifying" || manualCode.trim().length < 3
-                      }
-                    />
-                  </View>
+          <ShakeView signal={attempts} style={styles.panelStack}>
+            {status === "error" ? (
+              <>
+                <View style={styles.panelHead}>
+                  <Icon name="error" size={20} color={colors.danger} />
+                  <Text style={styles.panelTitle}>Access denied</Text>
                 </View>
-              ) : (
-                <GeneralButton
-                  label="Enter company ID manually"
-                  size="sm"
-                  variant="ghost"
-                  icon="badge"
-                  onPress={() => setManualOpen(true)}
-                  disabled={status === "verifying"}
-                />
-              )}
-            </>
-          )
+                <HintRow tone="danger" title="Why">
+                  {denial ?? "That badge could not be verified."}
+                </HintRow>
+                <HintRow tone="warning" title="Helpful hint">
+                  {hint}
+                </HintRow>
+                <Text style={styles.panelBody}>
+                  Scanning restarts automatically — hold the badge up again.
+                </Text>
+              </>
+            ) : status === "success" ? (
+              <>
+                <View style={styles.panelHead}>
+                  <Icon name="checkCircle" size={20} color={colors.success} />
+                  <Text style={styles.panelTitle}>Barcode verified</Text>
+                </View>
+                <Text style={styles.panelBody}>
+                  Continuing to face verification…
+                </Text>
+              </>
+            ) : (
+              <>
+                <View style={styles.panelHead}>
+                  <Icon name="qr" size={20} color={colors.primary} />
+                  <Text style={styles.panelTitle}>
+                    {status === "verifying" ? "Verifying…" : "Ready to scan"}
+                  </Text>
+                </View>
+                <Text style={styles.panelBody}>
+                  Keep the barcode flat and centred. Verification starts
+                  automatically.
+                </Text>
+  
+                {manualOpen ? (
+                  <View style={styles.manual}>
+                    <Input
+                      label="Company ID"
+                      icon="badge"
+                      value={manualCode}
+                      onChangeText={(text) => setManualCode(text.toUpperCase())}
+                      autoCapitalize="characters"
+                      autoCorrect={false}
+                      editable={status !== "verifying"}
+                      returnKeyType="go"
+                      onSubmitEditing={() => void runVerification(manualCode)}
+                    />
+                    <View style={styles.manualRow}>
+                      <GeneralButton
+                        label="Cancel"
+                        size="sm"
+                        variant="ghost"
+                        onPress={() => setManualOpen(false)}
+                        style={styles.manualBtn}
+                        disabled={status === "verifying"}
+                      />
+                      <GeneralButton
+                        label="Verify"
+                        size="sm"
+                        icon="check"
+                        onPress={() => void runVerification(manualCode)}
+                        style={styles.manualBtn}
+                        disabled={
+                          status === "verifying" || manualCode.trim().length < 3
+                        }
+                      />
+                    </View>
+                  </View>
+                ) : (
+                  <GeneralButton
+                    label="Enter company ID manually"
+                    size="sm"
+                    variant="ghost"
+                    icon="badge"
+                    onPress={() => setManualOpen(true)}
+                    disabled={status === "verifying"}
+                  />
+                )}
+              </>
+            )}
+          </ShakeView>
         }
       />
     </CameraPermissionGate>
@@ -274,6 +284,9 @@ export function BarcodeScannerScreen({
 }
 
 const styles = StyleSheet.create({
+  panelStack: {
+    gap: spacing.md,
+  },
   panelHead: {
     flexDirection: "row",
     alignItems: "center",

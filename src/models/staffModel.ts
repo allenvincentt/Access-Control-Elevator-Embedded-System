@@ -1,10 +1,11 @@
-import type { AccessStatusKey, FloorKey, StaffRow } from '@/types/database';
+import type { AccessStatusKey, FloorKey, StaffRoleKey, StaffRow } from '@/types/database';
 
 export type StaffModel = {
   id: string;
   fullName: string;
   email: string;
   companyId: string;
+  role: StaffRoleKey;
   authorizedFloors: FloorKey[];
   accessStatus: AccessStatusKey;
   photoPath: string | null;
@@ -20,6 +21,7 @@ export function toStaffModel(row: StaffRow): StaffModel {
     fullName: row.full_name,
     email: row.email,
     companyId: row.company_id,
+    role: row.role,
     authorizedFloors: row.authorized_floors,
     accessStatus: row.access_status,
     photoPath: row.photo_path,

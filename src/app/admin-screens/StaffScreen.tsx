@@ -22,7 +22,7 @@ import { Chip } from "@/components/ui/Chip";
 import { DetailRow } from "@/components/ui/DetailRow";
 import { Icon } from "@/components/ui/Icon";
 import { MessageBoxModal } from "@/components/ui/modals/MessageBoxModal";
-import { floorShortLabel } from "@/constants/floors";
+import { floorShortLabel, staffRoleLabel } from "@/constants/floors";
 import {
   colors,
   layout,
@@ -69,7 +69,21 @@ function FloorChips({ floors, max = 3 }: { floors: string[]; max?: number }) {
   );
 }
 
+function RoleChip({ role }: { role: StaffRow["role"] }) {
+  const guest = role === "Guest";
+  return (
+    <Chip
+      label={staffRoleLabel(role)}
+      tone={guest ? "gold" : "brand"}
+      size="sm"
+      icon={guest ? "person" : "shield"}
+    />
+  );
+}
+
 function FaceChip({ member }: { member: StaffRow }) {
+  if (member.role === "Guest") return null;
+
   const enrolled = member.face_template_count > 0;
   return (
     <Chip
@@ -123,12 +137,14 @@ function StaffCard({
           size="sm"
           icon={member.access_status === "Active" ? "checkCircle" : "lock"}
         />
+        <RoleChip role={member.role} />
         <FaceChip member={member} />
       </View>
 
       <View style={styles.cardDetails}>
         <DetailRow icon="mail" label="Gmail" value={member.email} />
         <DetailRow icon="badge" label="Company ID" value={member.company_id} />
+        <DetailRow icon="shield" label="Role" value={staffRoleLabel(member.role)} />
       </View>
 
       <View style={styles.floorsBlock}>
@@ -166,6 +182,9 @@ function StaffTableRow({
           {member.company_id}
         </Text>
         <FaceChip member={member} />
+      </View>
+      <View style={[styles.tCell, styles.colRole]}>
+        <RoleChip role={member.role} />
       </View>
       <View style={[styles.tCell, styles.colFloors]}>
         <FloorChips floors={member.authorized_floors} />
@@ -217,7 +236,7 @@ export function StaffScreen({ onCreate, onEdit, onReenrol }: StaffScreenProps) {
 
   const snackbar = useSnackbar();
   const { width } = useWindowDimensions();
-  const wide = width >= 720;
+  const wide = width >= 840;
 
   const [menuFor, setMenuFor] = useState<StaffRow | null>(null);
   const [deleteFor, setDeleteFor] = useState<StaffRow | null>(null);
@@ -394,6 +413,7 @@ export function StaffScreen({ onCreate, onEdit, onReenrol }: StaffScreenProps) {
               <Text style={[styles.tHeaderText, styles.colBadge]}>
                 Company ID
               </Text>
+              <Text style={[styles.tHeaderText, styles.colRole]}>Role</Text>
               <Text style={[styles.tHeaderText, styles.colFloors]}>
                 Authorized floors
               </Text>
@@ -641,7 +661,8 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   colBadge: { flex: 2, gap: spacing.xs },
-  colFloors: { flex: 2.4 },
+  colRole: { flex: 1.8 },
+  colFloors: { flex: 2.2 },
   colStatus: { flex: 1.2 },
   colActions: { width: 40, alignItems: "flex-end", paddingRight: 0 },
   tStaffText: {

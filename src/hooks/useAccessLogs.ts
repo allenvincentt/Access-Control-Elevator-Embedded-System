@@ -1,14 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { errorMessage } from '@/lib/errors';
-import { LOGS_PAGE_SIZE, listAccessLogs } from '@/services/logsService';
-import type { AccessDecision, AccessLogRow } from '@/types/database';
+import {
+  LOGS_PAGE_SIZE,
+  listAccessLogs,
+  type AccessAttempt,
+  type AttemptBadge,
+} from '@/services/logsService';
+import { signedPhotoUrls } from '@/services/storageService';
+import type { AccessDecision } from '@/types/database';
 
 export type LogDecisionFilter = AccessDecision | 'all';
 
+function mergeAttempts(current: AccessAttempt[], incoming: AccessAttempt[]): AccessAttempt[] {
+  const merged = new Map(current.map((attempt) => [attempt.key, attempt]));
+  incoming.forEach((attempt) => merged.set(attempt.key, attempt));
+  return Array.from(merged.values()).sort(
+    (a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt),
+  );
+}
+
 export function useAccessLogs() {
-  const [rows, setRows] = useState<AccessLogRow[]>([]);
-  const [total, setTotal] = useState(0);
+  const [attempts, setAttempts] = useState<AccessAttempt[]>([]);
+  const [badges, setBadges] = useState<Record<string, AttemptBadge>>({});
+  const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -34,6 +49,18 @@ export function useAccessLogs() {
     return () => clearTimeout(timer);
   }, [search]);
 
+  const hydratePhotos = useCallback(async (next: Record<string, AttemptBadge>) => {
+    const paths = Object.values(next)
+      .map((badge) => badge.photoPath)
+      .filter((path): path is string => Boolean(path));
+    if (paths.length === 0) return;
+
+    const urls = await signedPhotoUrls(paths);
+    if (mounted.current) {
+      setPhotoUrls((current) => ({ ...current, ...urls }));
+    }
+  }, []);
+
   const load = useCallback(
     async (nextPage: number, mode: 'initial' | 'refresh' | 'more') => {
       const id = requestId.current + 1;
@@ -54,10 +81,15 @@ export function useAccessLogs() {
 
         if (!mounted.current || requestId.current !== id) return;
 
-        setRows((current) => (mode === 'more' ? [...current, ...result.rows] : result.rows));
-        setTotal(result.total);
+        setAttempts((current) =>
+          mode === 'more' ? mergeAttempts(current, result.attempts) : result.attempts,
+        );
+        setBadges((current) =>
+          mode === 'more' ? { ...current, ...result.badges } : result.badges,
+        );
         setPage(result.page);
         setHasMore(result.hasMore);
+        void hydratePhotos(result.badges);
       } catch (caught) {
         if (mounted.current && requestId.current === id) {
           setError(errorMessage(caught, 'Access logs could not be loaded.'));
@@ -70,7 +102,7 @@ export function useAccessLogs() {
         }
       }
     },
-    [debouncedSearch, decision],
+    [debouncedSearch, decision, hydratePhotos],
   );
 
   useEffect(() => {
@@ -92,8 +124,10 @@ export function useAccessLogs() {
   }, [hasMore, load, loading, loadingMore, page]);
 
   return {
-    rows,
-    total,
+    attempts,
+    badges,
+    photoUrls,
+    total: attempts.length,
     hasMore,
     loading,
     refreshing,

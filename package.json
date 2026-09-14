@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "dependencies": {
     "@expo-google-fonts/material-symbols": "^0.4.45",
+    "@expo-google-fonts/plus-jakarta-sans": "^0.4.2",
     "@expo/ui": "~57.0.16",
     "@react-native-ml-kit/face-detection": "^2.0.1",
     "@sfourdrinier/react-native-ble-plx": "^3.9.3",

@@ -62,6 +62,27 @@ export async function verifyFace(
   return data as unknown as FaceVerificationResult;
 }
 
+export async function recordGuestFace(
+  sessionToken: string,
+  photoPath: string | null,
+  deviceId: string,
+): Promise<FaceVerificationResult> {
+  if (!/^[0-9a-f]{64}$/.test(sessionToken)) {
+    return { ok: false, reason: 'SessionExpired' };
+  }
+
+  const { data, error } = await supabase.rpc('record_guest_face', {
+    p_session_token: sessionToken,
+    p_photo_path: photoPath,
+    p_device_id: deviceId,
+  });
+
+  if (error) throw toAppError(error, 'The guest capture could not be recorded.');
+  if (!data) throw new AppError('NO_RESULT', 'The guest capture could not be recorded.');
+
+  return data as unknown as FaceVerificationResult;
+}
+
 export async function commitFloorAccess(
   sessionToken: string,
   floor: FloorKey,

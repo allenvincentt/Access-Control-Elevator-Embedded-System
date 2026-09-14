@@ -33,7 +33,7 @@ static const uint8_t OLED_ADDRESS_PRIMARY = 0x3C;
 static const uint8_t OLED_ADDRESS_ALTERNATE = 0x3D;
 static const uint32_t OLED_I2C_HZ = 100000;
 
-static const char *FLOOR_KEY[3] = {"MainLobby", "SecondFloor", "ThirdFloor"};
+static const char *FLOOR_KEY[3] = {"FirstFloor", "SecondFloor", "ThirdFloor"};
 static const char FLOOR_DIGIT[3] = {'1', '2', '3'};
 static const char *FLOOR_LABEL[3] = {"MAIN LOBBY", "SECOND FLOOR", "THIRD FLOOR"};
 static const uint8_t LOBBY_FLOOR = 0;
@@ -60,10 +60,11 @@ static const uint8_t SERVO_PWM_BITS = 16;
 static const uint8_t SERVO_LEFT_CHANNEL = 4;
 static const uint8_t SERVO_RIGHT_CHANNEL = 6;
 static const uint32_t SERVO_PERIOD_US = 20000;
-static const uint16_t SERVO_LEFT_CLOSED_US = 1500;
-static const uint16_t SERVO_LEFT_OPEN_US = 800;
-static const uint16_t SERVO_RIGHT_CLOSED_US = 1500;
-static const uint16_t SERVO_RIGHT_OPEN_US = 2200;
+static const uint16_t SERVO_US_AT_MIN_DEG = 500;
+static const uint16_t SERVO_US_AT_MAX_DEG = 2500;
+static const uint8_t SERVO_MAX_DEG = 180;
+static const uint8_t DOOR_CLOSED_DEG = 0;
+static const uint8_t DOOR_OPEN_DEG = 90;
 
 static const uint32_t BUZZER_PWM_FREQ = 2000;
 static const uint8_t BUZZER_PWM_BITS = 10;
@@ -211,6 +212,8 @@ static uint8_t toneIndex = 0;
 static uint32_t toneStepStartedAt = 0;
 
 static bool floorAuthorized[3] = {false, false, false};
+static bool grantActive = false;
+static uint8_t boardingFloor = 0;
 static char grantToken[65] = "";
 static char grantStaff[64] = "";
 static char selectedKey[16] = "";
@@ -227,8 +230,6 @@ static uint32_t buttonChangedAt[BUTTON_COUNT];
 
 static BLECharacteristic *statusChar = nullptr;
 static bool clientConnected = false;
-// Scanner terminals (and the admin app's monitoring link) all share the BLE
-// server, so the connection count is published with the status payload.
 static volatile uint8_t bleClientCount = 0;
 static volatile bool commandPending = false;
 static char commandBuffer[256] = "";
@@ -381,11 +382,16 @@ static uint16_t interpolateUs(uint16_t closedUs, uint16_t openUs, uint16_t permi
   return (uint16_t)((int32_t)closedUs + (span * (int32_t)permille) / 1000);
 }
 
+static uint16_t servoUsForDegrees(uint8_t degrees) {
+  uint32_t span = (uint32_t)(SERVO_US_AT_MAX_DEG - SERVO_US_AT_MIN_DEG);
+  return (uint16_t)(SERVO_US_AT_MIN_DEG + (span * degrees) / SERVO_MAX_DEG);
+}
+
 static void applyDoorPosition(uint16_t permille) {
-  servoWriteMicroseconds(PIN_SERVO_LEFT, SERVO_LEFT_CHANNEL,
-                         interpolateUs(SERVO_LEFT_CLOSED_US, SERVO_LEFT_OPEN_US, permille));
-  servoWriteMicroseconds(PIN_SERVO_RIGHT, SERVO_RIGHT_CHANNEL,
-                         interpolateUs(SERVO_RIGHT_CLOSED_US, SERVO_RIGHT_OPEN_US, permille));
+  uint16_t microseconds = interpolateUs(servoUsForDegrees(DOOR_CLOSED_DEG),
+                                        servoUsForDegrees(DOOR_OPEN_DEG), permille);
+  servoWriteMicroseconds(PIN_SERVO_LEFT, SERVO_LEFT_CHANNEL, microseconds);
+  servoWriteMicroseconds(PIN_SERVO_RIGHT, SERVO_RIGHT_CHANNEL, microseconds);
 }
 
 static uint16_t doorPermille() {
@@ -404,7 +410,17 @@ static uint16_t doorPermille() {
 }
 
 static bool doorOpenAuthorized() {
-  return floorAuthorized[currentFloor];
+  if (floorAuthorized[currentFloor]) {
+    return true;
+  }
+  return grantActive && currentFloor == boardingFloor;
+}
+
+static bool floorButtonsArmed() {
+  if (!grantActive) {
+    return true;
+  }
+  return doorState != DOOR_OPENING;
 }
 
 static void beginDoorMotion(bool opening) {
@@ -440,6 +456,7 @@ static void clearGrant() {
   for (uint8_t i = 0; i < 3; i++) {
     floorAuthorized[i] = false;
   }
+  grantActive = false;
   grantToken[0] = '\0';
   grantStaff[0] = '\0';
   pendingGrantClear = false;
@@ -845,6 +862,22 @@ static String statusJson() {
   json += sessionResult;
   json += "\",\"remaining_ms\":";
   json += String(remainingWindowMs());
+  json += ",\"authorized_floors\":[";
+  bool firstFloorKey = true;
+  for (uint8_t i = 0; i < 3; i++) {
+    if (!floorAuthorized[i]) {
+      continue;
+    }
+    if (!firstFloorKey) {
+      json += ",";
+    }
+    firstFloorKey = false;
+    json += "\"";
+    json += FLOOR_KEY[i];
+    json += "\"";
+  }
+  json += "],\"buttons_enabled\":";
+  json += (state != STATE_TRAVELING && floorButtonsArmed()) ? "true" : "false";
   json += ",\"clients\":";
   json += String((unsigned)bleClientCount);
   json += ",\"emergency\":";
@@ -909,6 +942,8 @@ static void processGrant(const String &body) {
   grantOpenedAt = millis();
   lastInputAt = grantOpenedAt;
   pendingGrantClear = false;
+  grantActive = true;
+  boardingFloor = currentFloor;
   displayDirty = true;
   beginDoorMotion(true);
 
@@ -1046,6 +1081,18 @@ static void onFloorButton(uint8_t index) {
     Serial.println(FLOOR_KEY[index]);
     return;
   }
+  if (grantActive && !floorAuthorized[index]) {
+    Serial.print("[button] ignored, floor not assigned to ");
+    Serial.print(grantStaff[0] == '\0' ? "this badge" : grantStaff);
+    Serial.print(": ");
+    Serial.println(FLOOR_KEY[index]);
+    return;
+  }
+  if (!floorButtonsArmed()) {
+    Serial.print("[button] held, door still opening: ");
+    Serial.println(FLOOR_KEY[index]);
+    return;
+  }
   if (index == currentFloor) {
     Serial.print("[button] rejected, already at ");
     Serial.println(FLOOR_KEY[index]);
@@ -1149,7 +1196,7 @@ static void serviceTravel(uint32_t now) {
   displayDirty = true;
 
   if (displayFloor == selectedFloor) {
-    travelPhase = TRAVEL_SETTLING;
+    travelPhase = TRAVEL_SETTLING;  
     settleStartedAt = now;
     Serial.print("[travel] reached ");
     Serial.print(FLOOR_KEY[displayFloor]);
@@ -1174,7 +1221,7 @@ static void serviceInactivity(uint32_t now) {
   }
 
   lastInputAt = now;
-  Serial.println("[inactivity] 20s without input, returning to MainLobby");
+  Serial.println("[inactivity] 20s without input, returning to FirstFloor");
   requestTrip(LOBBY_FLOOR, true);
 }
 
@@ -1281,7 +1328,7 @@ void setup() {
   enterIdle();
 
   lastInputAt = millis() - IDLE_ANIMATION_MS;
-  Serial.println("[boot] idle at MainLobby, door closed, idle animation showing");
+  Serial.println("[boot] idle at FirstFloor, door closed, idle animation showing");
 
   BLEDevice::init(BLE_NAME);
   BLEDevice::setMTU(247);

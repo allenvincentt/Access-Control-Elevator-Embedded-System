@@ -15,16 +15,30 @@ import { Icon } from "@/components/ui/Icon";
 import { Input } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/modals/Modal";
 import { Select } from "@/components/ui/Select";
-import { ACCESS_STATUS_KEYS, FLOOR_OPTIONS } from "@/constants/floors";
+import {
+  ACCESS_STATUS_KEYS,
+  FLOOR_OPTIONS,
+  STAFF_ROLE_OPTIONS,
+  floorShortLabel,
+  MANDATORY_FLOOR,
+  selectableFloors,
+  withMandatoryFloor,
+} from "@/constants/floors";
 import { colors, radius, spacing, typography } from "@/constants/themeColor";
 import { errorMessage } from "@/lib/errors";
 import { pickStaffPhotoBase64 } from "@/services/storageService";
-import type { AccessStatusKey, FloorKey, StaffRow } from "@/types/database";
+import type {
+  AccessStatusKey,
+  FloorKey,
+  StaffRoleKey,
+  StaffRow,
+} from "@/types/database";
 
 export type StaffDraft = {
   fullName: string;
   email: string;
   companyId: string;
+  role: StaffRoleKey;
   authorizedFloors: FloorKey[];
   accessStatus: AccessStatusKey;
   photoBase64: string | null;
@@ -32,6 +46,7 @@ export type StaffDraft = {
 
 export type StaffEditPatch = {
   companyId: string;
+  role: StaffRoleKey;
   authorizedFloors: FloorKey[];
   accessStatus: AccessStatusKey;
   photoBase64: string | null;
@@ -53,6 +68,7 @@ type FormState = {
   fullName: string;
   email: string;
   companyId: string;
+  role: StaffRoleKey;
   authorizedFloors: FloorKey[];
   accessStatus: AccessStatusKey;
   photoBase64: string | null;
@@ -68,6 +84,7 @@ const EMPTY: FormState = {
   fullName: "",
   email: "",
   companyId: "",
+  role: "CompanyPersonnel",
   authorizedFloors: [],
   accessStatus: "Active",
   photoBase64: null,
@@ -79,7 +96,8 @@ function fromMember(member: StaffRow): FormState {
     fullName: member.full_name,
     email: member.email,
     companyId: member.company_id,
-    authorizedFloors: member.authorized_floors,
+    role: member.role,
+    authorizedFloors: selectableFloors(member.authorized_floors),
     accessStatus: member.access_status,
     photoBase64: null,
     removePhoto: false,
@@ -105,9 +123,6 @@ function validate(form: FormState, isEdit: boolean): FormErrors {
   if (!companyId) errors.companyId = "Enter a company ID.";
   else if (!COMPANY_ID_PATTERN.test(companyId))
     errors.companyId = "Use 3–32 characters: A–Z, 0–9 and dashes.";
-
-  if (form.authorizedFloors.length === 0)
-    errors.authorizedFloors = "Grant access to at least one floor.";
 
   return errors;
 }
@@ -186,10 +201,13 @@ function StaffFormModal({
       return;
     }
 
+    const authorizedFloors = withMandatoryFloor(form.authorizedFloors);
+
     if (isEdit && member) {
       onEdit(member.id, {
         companyId: form.companyId.trim().toUpperCase(),
-        authorizedFloors: form.authorizedFloors,
+        role: form.role,
+        authorizedFloors,
         accessStatus: form.accessStatus,
         photoBase64: form.photoBase64,
         removePhoto: form.removePhoto,
@@ -201,15 +219,21 @@ function StaffFormModal({
       fullName: form.fullName.trim().replace(/\s+/g, " "),
       email: form.email.trim().toLowerCase(),
       companyId: form.companyId.trim().toUpperCase(),
-      authorizedFloors: form.authorizedFloors,
+      role: form.role,
+      authorizedFloors,
       accessStatus: form.accessStatus,
       photoBase64: form.photoBase64,
     });
   };
 
+  const isGuest = form.role === "Guest";
+  const createLabel = isGuest ? "Confirm" : "Continue";
+
   const summary = isEdit
-    ? "Update the badge, floor access, photo or status."
-    : "Add a person, choose their floors, then register their face.";
+    ? "Update the badge, role, floor access, photo or status."
+    : isGuest
+      ? "Add a guest and confirm — no face registration needed."
+      : "Add a person, choose their floors, then register their face.";
 
   return (
     <Modal
@@ -229,8 +253,8 @@ function StaffFormModal({
             style={styles.footerBtn}
           />
           <GeneralButton
-            label={isEdit ? "Save changes" : "Continue"}
-            icon={isEdit ? "check" : "face"}
+            label={isEdit ? "Save changes" : createLabel}
+            icon={isEdit || isGuest ? "check" : "face"}
             onPress={handleSubmit}
             loading={submitting}
             disabled={submitting}
@@ -355,15 +379,31 @@ function StaffFormModal({
         />
 
         <Select
+          label="Role"
+          icon="shield"
+          options={STAFF_ROLE_OPTIONS}
+          value={form.role}
+          onChange={(value) => set("role", value as StaffRoleKey)}
+          placeholder="Select a role"
+          sheetTitle="Staff role"
+          helperText={
+            isGuest
+              ? "Guests pass on the badge scan alone. Their face is captured at the door, not matched."
+              : "Company personnel must pass badge and face verification."
+          }
+          containerStyle={styles.field}
+        />
+
+        <Select
           label="Authorized floors"
           icon="floors"
           multiple
           options={FLOOR_OPTIONS}
           value={form.authorizedFloors}
           onChange={(value) => set("authorizedFloors", value as FloorKey[])}
-          error={liveErrors.authorizedFloors}
-          placeholder="Select floors"
+          placeholder="Main Lobby only"
           sheetTitle="Authorized floors"
+          helperText={`${floorShortLabel(MANDATORY_FLOOR)} is always included and cannot be removed.`}
           containerStyle={styles.field}
         />
 
@@ -403,7 +443,13 @@ function StaffFormModal({
           </View>
         </View>
 
-        {isEdit ? null : (
+        {isEdit ? null : isGuest ? (
+          <HintRow tone="info" title="Next step">
+            Confirm to add the guest straight away. At the door they only scan
+            their badge — the camera captures their face for the log, but it is
+            never matched against an enrolled template.
+          </HintRow>
+        ) : (
           <HintRow tone="info" title="Next step">
             After saving, the camera opens to register this person’s face. Only
             the mathematical face template is stored — no face photo is

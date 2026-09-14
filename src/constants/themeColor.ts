@@ -23,7 +23,7 @@ export const palette = {
   surfaceRaised: '#FFFFFF',
   surfaceAlt: '#F8F5F4',
   surfaceSunken: '#F1ECEA',
-  canvas: '#F4EFED',
+  canvas: '#FFFFFF',
 
   success: '#1E8A50',
   successTint: '#E3F3E9',
@@ -106,17 +106,29 @@ export const radius = {
   pill: 999,
 } as const;
 
+export const fontFamily = {
+  medium: 'PlusJakartaSans_500Medium',
+  semibold: 'PlusJakartaSans_600SemiBold',
+  bold: 'PlusJakartaSans_700Bold',
+  extrabold: 'PlusJakartaSans_800ExtraBold',
+} as const;
+
+const MEDIUM = { fontFamily: fontFamily.medium, fontWeight: '500' } as const;
+const SEMIBOLD = { fontFamily: fontFamily.semibold, fontWeight: '600' } as const;
+const BOLD = { fontFamily: fontFamily.bold, fontWeight: '700' } as const;
+const EXTRABOLD = { fontFamily: fontFamily.extrabold, fontWeight: '800' } as const;
+
 export const typography = {
-  display: { fontSize: 30, lineHeight: 36, fontWeight: '800', letterSpacing: -0.4 },
-  title: { fontSize: 23, lineHeight: 29, fontWeight: '800', letterSpacing: -0.3 },
-  heading: { fontSize: 18, lineHeight: 24, fontWeight: '700', letterSpacing: -0.2 },
-  subheading: { fontSize: 16, lineHeight: 22, fontWeight: '700' },
-  body: { fontSize: 15, lineHeight: 22, fontWeight: '400' },
-  bodyStrong: { fontSize: 15, lineHeight: 22, fontWeight: '600' },
-  label: { fontSize: 13, lineHeight: 17, fontWeight: '600', letterSpacing: 0.1 },
-  caption: { fontSize: 12, lineHeight: 16, fontWeight: '500' },
-  overline: { fontSize: 11, lineHeight: 14, fontWeight: '700', letterSpacing: 0.8 },
-  button: { fontSize: 15, lineHeight: 20, fontWeight: '700', letterSpacing: 0.2 },
+  display: { fontSize: 30, lineHeight: 36, letterSpacing: -0.4, ...EXTRABOLD },
+  title: { fontSize: 23, lineHeight: 29, letterSpacing: -0.3, ...EXTRABOLD },
+  heading: { fontSize: 18, lineHeight: 24, letterSpacing: -0.2, ...BOLD },
+  subheading: { fontSize: 16, lineHeight: 22, ...BOLD },
+  body: { fontSize: 15, lineHeight: 22, ...MEDIUM },
+  bodyStrong: { fontSize: 15, lineHeight: 22, ...SEMIBOLD },
+  label: { fontSize: 13, lineHeight: 17, letterSpacing: 0.1, ...SEMIBOLD },
+  caption: { fontSize: 12, lineHeight: 16, ...MEDIUM },
+  overline: { fontSize: 11, lineHeight: 14, letterSpacing: 0.8, ...BOLD },
+  button: { fontSize: 15, lineHeight: 20, letterSpacing: 0.2, ...BOLD },
   mono: {
     fontSize: 13,
     lineHeight: 18,
@@ -206,6 +218,7 @@ export const theme = {
   colors,
   spacing,
   radius,
+  fontFamily,
   typography,
   shadow,
   layout,

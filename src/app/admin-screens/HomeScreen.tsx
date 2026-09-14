@@ -27,6 +27,7 @@ import { Icon, type IconName } from "@/components/ui/Icon";
 import { floorShortLabel } from "@/constants/floors";
 import {
   colors,
+  fontFamily,
   layout,
   palette,
   radius,
@@ -844,6 +845,7 @@ const styles = StyleSheet.create({
   },
   statusLabel: {
     ...typography.caption,
+    fontFamily: fontFamily.bold,
     fontWeight: "700",
   },
 

@@ -1,6 +1,6 @@
 import { AppError, toAppError } from '@/lib/errors';
 import { supabase } from '@/lib/supabase';
-import { isFloorKey } from '@/constants/floors';
+import { isFloorKey, isStaffRoleKey, withMandatoryFloor } from '@/constants/floors';
 import { FACE_MODEL_VERSION } from '@/services/face/constants';
 import { removeStaffPhoto } from '@/services/storageService';
 import type {
@@ -8,11 +8,12 @@ import type {
   EnrollmentResult,
   FaceSamplePayload,
   FloorKey,
+  StaffRoleKey,
   StaffRow,
 } from '@/types/database';
 
 const STAFF_COLUMNS =
-  'id, full_name, email, company_id, authorized_floors, access_status, photo_path, face_enrolled_at, face_template_count, created_at, updated_at';
+  'id, full_name, email, company_id, role, authorized_floors, access_status, photo_path, face_enrolled_at, face_template_count, created_at, updated_at';
 
 export const STAFF_PAGE_SIZE = 25;
 
@@ -38,6 +39,7 @@ export type StaffCreateInput = {
   fullName: string;
   email: string;
   companyId: string;
+  role: StaffRoleKey;
   authorizedFloors: FloorKey[];
   accessStatus: AccessStatusKey;
   photoPath?: string | null;
@@ -46,6 +48,7 @@ export type StaffCreateInput = {
 
 export type StaffEditInput = {
   companyId: string;
+  role: StaffRoleKey;
   authorizedFloors: FloorKey[];
   accessStatus: AccessStatusKey;
   photoPath?: string | null;
@@ -56,14 +59,18 @@ function normaliseName(value: string) {
 }
 
 function assertFloors(floors: FloorKey[]) {
-  const unique = Array.from(new Set(floors));
-  if (unique.length === 0) {
-    throw new AppError('NO_FLOORS', 'Grant access to at least one floor.');
-  }
+  const unique = Array.from(new Set(withMandatoryFloor(floors)));
   if (unique.some((floor) => !isFloorKey(floor))) {
     throw new AppError('BAD_FLOOR', 'One of the selected floors is not recognised.');
   }
   return unique;
+}
+
+function assertRole(value: StaffRoleKey): StaffRoleKey {
+  if (!isStaffRoleKey(value)) {
+    throw new AppError('BAD_ROLE', 'Role must be Company Personnel or Guest.');
+  }
+  return value;
 }
 
 function assertCompanyId(value: string) {
@@ -169,6 +176,7 @@ export async function createStaff(input: StaffCreateInput): Promise<StaffRow> {
     p_photo_path: input.photoPath ?? null,
     p_samples: assertSamples(input.faceSamples),
     p_model_version: FACE_MODEL_VERSION,
+    p_role: assertRole(input.role),
   });
 
   if (error) throw toAppError(error, 'The staff member could not be created.');
@@ -178,6 +186,7 @@ export async function createStaff(input: StaffCreateInput): Promise<StaffRow> {
 export async function updateStaff(id: string, input: StaffEditInput): Promise<StaffRow> {
   const patch = {
     company_id: assertCompanyId(input.companyId),
+    role: assertRole(input.role),
     authorized_floors: assertFloors(input.authorizedFloors),
     access_status: assertStatus(input.accessStatus),
     ...(input.photoPath !== undefined ? { photo_path: input.photoPath } : {}),

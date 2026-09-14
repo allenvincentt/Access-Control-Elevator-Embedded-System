@@ -9,7 +9,15 @@ import { HintRow } from '@/components/HintRow';
 import { Screen } from '@/components/layout/Screen';
 import { Icon, type IconName } from '@/components/ui/Icon';
 import { GeneralButton } from '@/components/ui/buttons/GeneralButton';
-import { colors, radius, shadow, spacing, typography } from '@/constants/themeColor';
+import {
+  colors,
+  fontFamily,
+  palette,
+  radius,
+  shadow,
+  spacing,
+  typography,
+} from '@/constants/themeColor';
 import { useAuth } from '@/hooks/useAuth';
 import { useStaff } from '@/hooks/useStaff';
 import { errorMessage } from '@/lib/errors';
@@ -127,11 +135,6 @@ export function AppShell() {
     setEnrollment({ kind: 'reenrol', member });
   }, []);
 
-  const handleCreateDraft = useCallback((draft: StaffDraft) => {
-    setStaffModal(null);
-    setEnrollment({ kind: 'create', draft });
-  }, []);
-
   const handleEditSubmit = useCallback(
     async (id: string, patch: StaffEditPatch) => {
       setSubmitting(true);
@@ -147,6 +150,7 @@ export function AppShell() {
 
         await updateStaff(id, {
           companyId: patch.companyId,
+          role: patch.role,
           authorizedFloors: patch.authorizedFloors,
           accessStatus: patch.accessStatus,
           ...(photoPath !== undefined ? { photoPath } : {}),
@@ -169,26 +173,15 @@ export function AppShell() {
     [snackbar, staffModal, updateStaff],
   );
 
-  const handleEnrollmentComplete = useCallback(
-    async (samples: FaceSamplePayload[]) => {
-      if (!enrollment) return;
+  const submitDraft = useCallback(
+    async (draft: StaffDraft, samples: FaceSamplePayload[]) => {
       setSubmitting(true);
-
       try {
-        if (enrollment.kind === 'reenrol') {
-          await enrollFace(enrollment.member.id, samples);
-          snackbar.show(`Face re-registered for ${enrollment.member.full_name}`, {
-            variant: 'success',
-          });
-          setEnrollment(null);
-          return;
-        }
-
-        const { draft } = enrollment;
         const created = await createStaff({
           fullName: draft.fullName,
           email: draft.email,
           companyId: draft.companyId,
+          role: draft.role,
           authorizedFloors: draft.authorizedFloors,
           accessStatus: draft.accessStatus,
           photoPath: null,
@@ -200,6 +193,7 @@ export function AppShell() {
             const path = await uploadStaffPhoto(created.id, draft.photoBase64);
             await updateStaffRequest(created.id, {
               companyId: created.company_id,
+              role: created.role,
               authorizedFloors: created.authorized_floors,
               accessStatus: created.access_status,
               photoPath: path,
@@ -212,9 +206,15 @@ export function AppShell() {
           }
         }
 
+        setStaffModal(null);
         setEnrollment(null);
         setTab('staff');
-        snackbar.show(`${created.full_name} added and face registered`, { variant: 'success' });
+        snackbar.show(
+          samples.length > 0
+            ? `${created.full_name} added and face registered`
+            : `${created.full_name} added as a guest`,
+          { variant: 'success' },
+        );
       } catch (error) {
         snackbar.show(errorMessage(error, 'The staff member could not be saved.'), {
           variant: 'error',
@@ -224,7 +224,47 @@ export function AppShell() {
         setSubmitting(false);
       }
     },
-    [createStaff, enrollFace, enrollment, refresh, snackbar],
+    [createStaff, refresh, snackbar],
+  );
+
+  const handleCreateDraft = useCallback(
+    (draft: StaffDraft) => {
+      if (draft.role === 'Guest') {
+        void submitDraft(draft, []);
+        return;
+      }
+      setStaffModal(null);
+      setEnrollment({ kind: 'create', draft });
+    },
+    [submitDraft],
+  );
+
+  const handleEnrollmentComplete = useCallback(
+    async (samples: FaceSamplePayload[]) => {
+      if (!enrollment) return;
+
+      if (enrollment.kind === 'reenrol') {
+        setSubmitting(true);
+        try {
+          await enrollFace(enrollment.member.id, samples);
+          snackbar.show(`Face re-registered for ${enrollment.member.full_name}`, {
+            variant: 'success',
+          });
+          setEnrollment(null);
+        } catch (error) {
+          snackbar.show(errorMessage(error, 'The face could not be enrolled.'), {
+            variant: 'error',
+            duration: 6000,
+          });
+        } finally {
+          setSubmitting(false);
+        }
+        return;
+      }
+
+      await submitDraft(enrollment.draft, samples);
+    },
+    [enrollFace, enrollment, snackbar, submitDraft],
   );
 
   if (!profile) return null;
@@ -303,7 +343,7 @@ export function AppShell() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: palette.white,
   },
   fallback: {
     flex: 1,
@@ -312,6 +352,7 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
+    backgroundColor: palette.white,
   },
   navHost: {
     position: 'absolute',
@@ -333,7 +374,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.7)',
+    borderColor: colors.border,
     ...shadow.lg,
   },
   navSheen: {
@@ -342,7 +383,7 @@ const styles = StyleSheet.create({
     left: '12%',
     right: '12%',
     height: 1,
-    backgroundColor: 'rgba(255,255,255,0.55)',
+    backgroundColor: colors.surfaceAlt,
   },
   navSide: {
     flexDirection: 'row',
@@ -377,11 +418,14 @@ const styles = StyleSheet.create({
   },
   tabLabel: {
     ...typography.caption,
+    fontFamily: fontFamily.semibold,
+    fontWeight: '600',
     fontSize: 11,
     color: colors.textMuted,
   },
   tabLabelActive: {
     color: colors.primary,
+    fontFamily: fontFamily.bold,
     fontWeight: '700',
   },
 });

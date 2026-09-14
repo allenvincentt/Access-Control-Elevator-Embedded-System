@@ -4,13 +4,14 @@ import { BarcodeScannerScreen } from '@/app/auth/scanner-screens/BarcodeScannerS
 import { DoorReleaseScreen } from '@/app/auth/scanner-screens/DoorReleaseScreen';
 import { FacialRecognitionScreen } from '@/app/auth/scanner-screens/FacialRecognitionScreen';
 import { cancelVerificationSession } from '@/services/verificationService';
-import type { FloorKey } from '@/types/database';
+import type { FloorKey, StaffRoleKey } from '@/types/database';
 
 export type VerificationSession = {
   token: string;
   expiresAt: string;
   staffName: string;
   companyId: string;
+  role: StaffRoleKey;
 };
 
 type Stage =

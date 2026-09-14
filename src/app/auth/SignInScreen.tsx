@@ -42,6 +42,7 @@ export function SignInScreen() {
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
   const [submitted, setSubmitted] = useState(false);
+  const [attempts, setAttempts] = useState(0);
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
@@ -58,6 +59,7 @@ export function SignInScreen() {
 
   const handleSubmit = async () => {
     setSubmitted(true);
+    setAttempts((count) => count + 1);
     setFormError(null);
 
     if (!trimmedEmail || !EMAIL_PATTERN.test(trimmedEmail) || !password) {
@@ -134,6 +136,7 @@ export function SignInScreen() {
                 value={email}
                 onChangeText={setEmail}
                 error={emailError}
+                errorSignal={attempts}
                 autoCapitalize="none"
                 autoCorrect={false}
                 autoComplete="username"
@@ -150,6 +153,7 @@ export function SignInScreen() {
                 value={password}
                 onChangeText={setPassword}
                 error={passwordError}
+                errorSignal={attempts}
                 returnKeyType="go"
                 editable={!busy}
                 onSubmitEditing={handleSubmit}

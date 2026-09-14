@@ -21,6 +21,7 @@ import { FaceAperture, type ApertureTone } from '@/components/scanner/FaceApertu
 import { ScannerScaffold } from '@/components/scanner/ScannerScaffold';
 import { GeneralButton } from '@/components/ui/buttons/GeneralButton';
 import { Icon, type IconName } from '@/components/ui/Icon';
+import { ShakeView } from '@/components/ui/ShakeView';
 import { colors, palette, radius, spacing, typography } from '@/constants/themeColor';
 import { getDeviceId } from '@/lib/deviceId';
 import { DENIAL_MESSAGES, errorMessage } from '@/lib/errors';
@@ -33,7 +34,7 @@ import {
   FACE_TERMINAL_SUBJECT_RULES,
 } from '@/services/face/constants';
 import { warmUpFaceModel, type FaceModelState } from '@/services/face/embedder';
-import { captureFaceFromPhoto } from '@/services/face/pipeline';
+import { captureFaceFromPhoto, captureFacePhoto } from '@/services/face/pipeline';
 import { readPresence } from '@/services/face/presence';
 import {
   recordIssue,
@@ -43,7 +44,8 @@ import {
   type TelemetrySnapshot,
 } from '@/services/face/telemetry';
 import { PresenceTracker, type TrackedPresence } from '@/services/face/tracker';
-import { verifyFace } from '@/services/verificationService';
+import { uploadGuestCapture } from '@/services/storageService';
+import { recordGuestFace, verifyFace } from '@/services/verificationService';
 import type { FloorKey } from '@/types/database';
 
 export type FacialRecognitionScreenProps = {
@@ -85,6 +87,8 @@ type Frame = {
 };
 
 const LOCAL_MISS_LIMIT = 5;
+const GUEST_PORTRAIT_SIZE = 384;
+const GUEST_PORTRAIT_MARGIN = 0.55;
 const IDEAL_BAND_END = Math.min(
   1,
   (FACE_PRESENCE.idealWidthRatio * 1.6) / FACE_PRESENCE.maxWidthRatio,
@@ -98,6 +102,7 @@ export function FacialRecognitionScreen({
 }: FacialRecognitionScreenProps) {
   const snackbar = useSnackbar();
   const insets = useSafeAreaInsets();
+  const isGuest = session.role === 'Guest';
   const cameraRef = useRef<CameraView>(null);
   const mounted = useRef(true);
   const phaseRef = useRef<Phase>('starting');
@@ -127,6 +132,9 @@ export function FacialRecognitionScreen({
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [diagnostics, setDiagnostics] = useState<TelemetrySnapshot | null>(null);
   const [secondsLeft, setSecondsLeft] = useState(() => remainingSeconds(session.expiresAt));
+  const [errorPulse, setErrorPulse] = useState(0);
+
+  const pulseError = useCallback(() => setErrorPulse((count) => count + 1), []);
 
   const setPhase = useCallback((next: Phase) => {
     phaseRef.current = next;
@@ -164,6 +172,7 @@ export function FacialRecognitionScreen({
       tracker.current.reset();
       setProgress(0);
       setHalt(next);
+      pulseError();
       setPhase('halted');
       if (next.autoExit) {
         holdTimer.current = setTimeout(() => {
@@ -171,11 +180,20 @@ export function FacialRecognitionScreen({
         }, 2400);
       }
     },
-    [clearHold, onCancel, setPhase],
+    [clearHold, onCancel, pulseError, setPhase],
   );
 
   useEffect(() => {
     mounted.current = true;
+
+    if (isGuest) {
+      if (phaseRef.current === 'starting') setPhase('watching');
+      return () => {
+        mounted.current = false;
+        if (holdTimer.current) clearTimeout(holdTimer.current);
+      };
+    }
+
     warmUpFaceModel().then((state) => {
       if (!mounted.current) return;
       setModel(state);
@@ -193,7 +211,7 @@ export function FacialRecognitionScreen({
       mounted.current = false;
       if (holdTimer.current) clearTimeout(holdTimer.current);
     };
-  }, [setPhase, stop]);
+  }, [isGuest, setPhase, stop]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
@@ -286,10 +304,11 @@ export function FacialRecognitionScreen({
       tracker.current.reset();
       setProgress(0);
       setCoaching({ caption, detail });
+      pulseError();
       setPhase('coaching');
       holdThenResume(FACE_PRESENCE.guidanceHoldMs);
     },
-    [holdThenResume, setPhase],
+    [holdThenResume, pulseError, setPhase],
   );
 
   const runVerification = useCallback(async () => {
@@ -305,11 +324,19 @@ export function FacialRecognitionScreen({
         return;
       }
 
-      const outcome = await captureFaceFromPhoto(frame, {
+      const captureOptions = {
         gates: FACE_TERMINAL_GATES,
         rules: FACE_TERMINAL_SUBJECT_RULES,
         messages: FACE_TERMINAL_ISSUE_MESSAGES,
-      });
+      };
+
+      const outcome = isGuest
+        ? await captureFacePhoto(frame, {
+            ...captureOptions,
+            outputSize: GUEST_PORTRAIT_SIZE,
+            cropMarginRatio: GUEST_PORTRAIT_MARGIN,
+          })
+        : await captureFaceFromPhoto(frame, captureOptions);
       discard(frame.uri);
 
       if (!mounted.current) return;
@@ -323,17 +350,26 @@ export function FacialRecognitionScreen({
         return;
       }
 
-      discard(outcome.capture.cropUri);
       localMisses.current = 0;
       setPhase('verifying');
 
       const deviceId = await getDeviceId();
-      const result = await verifyFace(
-        session.token,
-        outcome.capture.embedding,
-        outcome.capture.quality,
-        deviceId,
-      );
+      let result;
+
+      if ('photo' in outcome) {
+        const photoPath = await uploadGuestCapture(outcome.photo.cropBase64);
+        discard(outcome.photo.cropUri);
+        if (!mounted.current) return;
+        result = await recordGuestFace(session.token, photoPath, deviceId);
+      } else {
+        discard(outcome.capture.cropUri);
+        result = await verifyFace(
+          session.token,
+          outcome.capture.embedding,
+          outcome.capture.quality,
+          deviceId,
+        );
+      }
 
       if (!mounted.current) return;
 
@@ -341,7 +377,12 @@ export function FacialRecognitionScreen({
         recordOutcome('granted');
         clearHold();
         setPhase('granted');
-        snackbar.show(`Identity confirmed — ${result.staff.full_name}`, { variant: 'success' });
+        snackbar.show(
+          isGuest
+            ? `Guest checked in — ${result.staff.full_name}`
+            : `Identity confirmed — ${result.staff.full_name}`,
+          { variant: 'success' },
+        );
         holdTimer.current = setTimeout(() => {
           if (mounted.current) onFacePassed(result.authorized_floors);
         }, FACE_PRESENCE.grantedHoldMs);
@@ -378,6 +419,7 @@ export function FacialRecognitionScreen({
       tracker.current.reset();
       setProgress(0);
       setDenial({ message: DENIAL_MESSAGES[result.reason], attemptsLeft });
+      pulseError();
       setPhase('denied');
       holdThenResume(FACE_PRESENCE.deniedHoldMs);
     } catch (error) {
@@ -392,6 +434,7 @@ export function FacialRecognitionScreen({
       tracker.current.reset();
       setProgress(0);
       setDenial({ message, attemptsLeft: null });
+      pulseError();
       setPhase('denied');
       holdThenResume(FACE_PRESENCE.deniedHoldMs);
     }
@@ -400,7 +443,9 @@ export function FacialRecognitionScreen({
     clearHold,
     coach,
     holdThenResume,
+    isGuest,
     onFacePassed,
+    pulseError,
     session.token,
     setPhase,
     snackbar,
@@ -426,7 +471,11 @@ export function FacialRecognitionScreen({
   }, []);
 
   const monitoring =
-    cameraReady && appActive && settled && phase !== 'halted' && model?.ready === true;
+    cameraReady &&
+    appActive &&
+    settled &&
+    phase !== 'halted' &&
+    (isGuest || model?.ready === true);
 
   useEffect(() => {
     if (!monitoring) return;
@@ -509,8 +558,8 @@ export function FacialRecognitionScreen({
   }, [monitoring, stop, takePollFrame]);
 
   const view = useMemo(
-    () => describe({ phase, presence, coaching, denial, halt, reArm }),
-    [coaching, denial, halt, phase, presence, reArm],
+    () => describe({ phase, presence, coaching, denial, halt, reArm, isGuest }),
+    [coaching, denial, halt, isGuest, phase, presence, reArm],
   );
 
   const expired = secondsLeft <= 0;
@@ -525,7 +574,7 @@ export function FacialRecognitionScreen({
     >
       <ScannerScaffold
         step="Step 2 of 3"
-        title="Face verification"
+        title={isGuest ? 'Guest photo' : 'Face verification'}
         subtitle={`${session.staffName} · ${session.companyId}`}
         onExit={onCancel}
         exitIcon="back"
@@ -553,92 +602,101 @@ export function FacialRecognitionScreen({
           </>
         }
         panel={
-          phase === 'granted' ? (
-            <>
-              <PanelHead icon="checkCircle" color={colors.success} title="Identity confirmed" />
-              <Text style={styles.body}>Releasing the elevator door…</Text>
-            </>
-          ) : phase === 'halted' ? (
-            <>
-              <PanelHead
-                icon="error"
-                color={colors.danger}
-                title={halt?.title ?? 'Scanner stopped'}
-              />
-              <HintRow tone="danger" title="What happened">
-                {halt?.body ?? 'The scanner cannot continue.'}
-              </HintRow>
-              <GeneralButton label="Back to barcode" icon="back" fullWidth onPress={onCancel} />
-            </>
-          ) : phase === 'denied' ? (
-            <>
-              <PanelHead icon="error" color={colors.danger} title="Not verified" />
-              <HintRow tone="danger" title="Why">
-                {denial?.message ?? 'The face could not be verified.'}
-              </HintRow>
-              <HintRow tone="warning" title="What happens next">
-                {reArm
-                  ? 'Step away from the door, then walk up again to retry.'
-                  : 'The scanner re-arms on its own — stay in front of it and hold still.'}
-              </HintRow>
-              {denial?.attemptsLeft != null ? (
-                <Text style={styles.meta}>
-                  {denial.attemptsLeft} attempt{denial.attemptsLeft === 1 ? '' : 's'} left on this
-                  badge scan.
-                </Text>
-              ) : null}
-              <GeneralButton
-                label="Back to barcode"
-                variant="ghost"
-                size="sm"
-                onPress={onCancel}
-              />
-            </>
-          ) : (
-            <>
-              <Pressable
-                style={styles.head}
-                delayLongPress={1500}
-                onLongPress={() => {
-                  setDiagnostics(snapshotTelemetry());
-                  setDiagnosticsOpen((open) => !open);
-                }}
-              >
-                <LiveDot color={view.dot} pulsing={phase === 'watching'} />
-                <Text style={styles.title}>{view.panelTitle}</Text>
-                <Text style={styles.clock}>{expired ? 'expired' : `${secondsLeft}s`}</Text>
-              </Pressable>
-
-              {diagnosticsOpen ? (
-                <Diagnostics snapshot={diagnostics} presence={presence} />
-              ) : presence?.present ? (
-                <View style={styles.meter}>
-                  <View style={styles.track}>
-                    <View
-                      style={[
-                        styles.band,
-                        {
-                          left: `${IDEAL_BAND_START * 100}%`,
-                          width: `${(IDEAL_BAND_END - IDEAL_BAND_START) * 100}%`,
-                        },
-                      ]}
-                    />
-                    <View
-                      style={[
-                        styles.fill,
-                        { width: `${meterFill * 100}%`, backgroundColor: view.dot },
-                      ]}
-                    />
+          <ShakeView
+            signal={errorPulse}
+            style={live ? styles.livePanelStack : styles.panelStack}
+          >
+            {phase === 'granted' ? (
+              <>
+                <PanelHead
+                  icon="checkCircle"
+                  color={colors.success}
+                  title={isGuest ? 'Guest checked in' : 'Identity confirmed'}
+                />
+                <Text style={styles.body}>Releasing the elevator door…</Text>
+              </>
+            ) : phase === 'halted' ? (
+              <>
+                <PanelHead
+                  icon="error"
+                  color={colors.danger}
+                  title={halt?.title ?? 'Scanner stopped'}
+                />
+                <HintRow tone="danger" title="What happened">
+                  {halt?.body ?? 'The scanner cannot continue.'}
+                </HintRow>
+                <GeneralButton label="Back to barcode" icon="back" fullWidth onPress={onCancel} />
+              </>
+            ) : phase === 'denied' ? (
+              <>
+                <PanelHead icon="error" color={colors.danger} title="Not verified" />
+                <HintRow tone="danger" title="Why">
+                  {denial?.message ?? 'The face could not be verified.'}
+                </HintRow>
+                <HintRow tone="warning" title="What happens next">
+                  {reArm
+                    ? 'Step away from the door, then walk up again to retry.'
+                    : 'The scanner re-arms on its own — stay in front of it and hold still.'}
+                </HintRow>
+                {denial?.attemptsLeft != null ? (
+                  <Text style={styles.meta}>
+                    {denial.attemptsLeft} attempt{denial.attemptsLeft === 1 ? '' : 's'} left on this
+                    badge scan.
+                  </Text>
+                ) : null}
+                <GeneralButton
+                  label="Back to barcode"
+                  variant="ghost"
+                  size="sm"
+                  onPress={onCancel}
+                />
+              </>
+            ) : (
+              <>
+                <Pressable
+                  style={styles.head}
+                  delayLongPress={1500}
+                  onLongPress={() => {
+                    setDiagnostics(snapshotTelemetry());
+                    setDiagnosticsOpen((open) => !open);
+                  }}
+                >
+                  <LiveDot color={view.dot} pulsing={phase === 'watching'} />
+                  <Text style={styles.title}>{view.panelTitle}</Text>
+                  <Text style={styles.clock}>{expired ? 'expired' : `${secondsLeft}s`}</Text>
+                </Pressable>
+  
+                {diagnosticsOpen ? (
+                  <Diagnostics snapshot={diagnostics} presence={presence} />
+                ) : presence?.present ? (
+                  <View style={styles.meter}>
+                    <View style={styles.track}>
+                      <View
+                        style={[
+                          styles.band,
+                          {
+                            left: `${IDEAL_BAND_START * 100}%`,
+                            width: `${(IDEAL_BAND_END - IDEAL_BAND_START) * 100}%`,
+                          },
+                        ]}
+                      />
+                      <View
+                        style={[
+                          styles.fill,
+                          { width: `${meterFill * 100}%`, backgroundColor: view.dot },
+                        ]}
+                      />
+                    </View>
+                    <Text style={styles.meterValue}>{view.distance}</Text>
                   </View>
-                  <Text style={styles.meterValue}>{view.distance}</Text>
-                </View>
-              ) : (
-                <Text style={styles.meta}>
-                  No button needed — the scanner starts on its own.
-                </Text>
-              )}
-            </>
-          )
+                ) : (
+                  <Text style={styles.meta}>
+                    No button needed — the scanner starts on its own.
+                  </Text>
+                )}
+              </>
+            )}
+          </ShakeView>
         }
       />
     </CameraPermissionGate>
@@ -661,6 +719,7 @@ function describe({
   denial,
   halt,
   reArm,
+  isGuest,
 }: {
   phase: Phase;
   presence: TrackedPresence | null;
@@ -668,6 +727,7 @@ function describe({
   denial: Denial | null;
   halt: Halt | null;
   reArm: boolean;
+  isGuest: boolean;
 }): ViewModel {
   const distance = !presence
     ? '—'
@@ -703,8 +763,8 @@ function describe({
     return {
       tone: 'granted',
       caption: 'Access granted',
-      detail: 'Identity confirmed.',
-      panelTitle: 'Identity confirmed',
+      detail: isGuest ? 'Guest photo captured.' : 'Identity confirmed.',
+      panelTitle: isGuest ? 'Guest checked in' : 'Identity confirmed',
       dot: colors.success,
       distance,
     };
@@ -735,9 +795,16 @@ function describe({
   if (phase === 'scanning' || phase === 'verifying') {
     return {
       tone: 'working',
-      caption: phase === 'scanning' ? 'Scanning…' : 'Checking your identity…',
+      caption:
+        phase === 'scanning'
+          ? isGuest
+            ? 'Taking your photo…'
+            : 'Scanning…'
+          : isGuest
+            ? 'Saving your photo…'
+            : 'Checking your identity…',
       detail: 'Hold still — this takes a moment.',
-      panelTitle: phase === 'scanning' ? 'Scanning' : 'Verifying',
+      panelTitle: phase === 'scanning' ? 'Capturing' : isGuest ? 'Saving' : 'Verifying',
       dot: palette.white,
       distance,
     };
@@ -917,6 +984,12 @@ function remainingSeconds(expiresAt: string) {
 const styles = StyleSheet.create({
   livePanel: {
     padding: spacing.base,
+    gap: spacing.sm,
+  },
+  panelStack: {
+    gap: spacing.md,
+  },
+  livePanelStack: {
     gap: spacing.sm,
   },
   head: {
