@@ -18,6 +18,7 @@ import { ShakeView } from "@/components/ui/ShakeView";
 import { colors, spacing, typography } from "@/constants/themeColor";
 import { getDeviceId } from "@/lib/deviceId";
 import { DENIAL_MESSAGES, errorMessage } from "@/lib/errors";
+import { announceAccessDenied, announceAccessGranted } from "@/lib/speech";
 import { verifyBarcode } from "@/services/verificationService";
 
 export type BarcodeScannerScreenProps = {
@@ -89,6 +90,7 @@ export function BarcodeScannerScreen({
 
         if (result.ok) {
           setStatus("success");
+          announceAccessGranted();
           snackbar.show(`Badge verified — ${result.staff.full_name}`, {
             variant: "success",
           });
@@ -108,6 +110,7 @@ export function BarcodeScannerScreen({
         setStatus("error");
         setAttempts((count) => count + 1);
         setDenial(DENIAL_MESSAGES[result.reason]);
+        announceAccessDenied();
         snackbar.show(DENIAL_MESSAGES[result.reason], { variant: "error" });
         rearmAfterDenial();
       } catch (error) {
@@ -119,6 +122,7 @@ export function BarcodeScannerScreen({
           "The barcode could not be checked.",
         );
         setDenial(message);
+        announceAccessDenied();
         snackbar.show(message, { variant: "error" });
         rearmAfterDenial();
       }

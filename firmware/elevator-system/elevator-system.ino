@@ -38,9 +38,8 @@ static const char FLOOR_DIGIT[3] = {'1', '2', '3'};
 static const char *FLOOR_LABEL[3] = {"MAIN LOBBY", "SECOND FLOOR", "THIRD FLOOR"};
 static const uint8_t LOBBY_FLOOR = 0;
 
-static const uint32_t GRANT_WINDOW_MS = 30000;
+static const uint32_t DOOR_HOLD_MS = 30000;
 static const uint32_t DOOR_TRAVEL_MS = 900;
-static const uint32_t DOOR_AUTO_CLOSE_MS = 10000;
 static const uint32_t INACTIVITY_RETURN_MS = 20000;
 static const uint32_t FLOOR_TRAVEL_MS = 1400;
 static const uint32_t MOTOR_STOP_DELAY_MS = 700;
@@ -63,8 +62,26 @@ static const uint32_t SERVO_PERIOD_US = 20000;
 static const uint16_t SERVO_US_AT_MIN_DEG = 500;
 static const uint16_t SERVO_US_AT_MAX_DEG = 2500;
 static const uint8_t SERVO_MAX_DEG = 180;
-static const uint8_t DOOR_CLOSED_DEG = 0;
-static const uint8_t DOOR_OPEN_DEG = 90;
+
+static const uint16_t SERVO_US_MIN_SAFE = 600;
+static const uint16_t SERVO_US_MAX_SAFE = 2400;
+
+static const uint8_t DOOR_LEFT_CLOSED_DEG = 90;
+static const uint8_t DOOR_RIGHT_CLOSED_DEG = 90;
+
+static const uint8_t DOOR_TRAVEL_DEG = 60;
+static const bool DOOR_LEFT_OPENS_CW = false;
+
+static const bool SERVO_TRIM_MODE = false;
+
+static const uint32_t SERVO_DUTY_MAX = (1UL << SERVO_PWM_BITS) - 1UL;
+
+static const uint32_t SERVO_FRAME_MS = SERVO_PERIOD_US / 1000;
+
+static const uint32_t SERVO_STAGGER_MS = 40;
+static const uint32_t SERVO_ARM_SETTLE_MS = 150;
+
+static const uint32_t SERVO_RELEASE_MS = 600;
 
 static const uint32_t BUZZER_PWM_FREQ = 2000;
 static const uint8_t BUZZER_PWM_BITS = 10;
@@ -193,6 +210,9 @@ static int8_t travelStep = 0;
 static bool autoReturnTrip = false;
 static bool pendingGrantClear = false;
 
+static bool servosArmed = false;
+static uint32_t lastServoWriteAt = 0;
+
 static uint32_t doorMotionStartedAt = 0;
 static uint32_t doorOpenSince = 0;
 static uint32_t segmentStartedAt = 0;
@@ -216,8 +236,11 @@ static bool grantActive = false;
 static uint8_t boardingFloor = 0;
 static char grantToken[65] = "";
 static char grantStaff[64] = "";
-static char selectedKey[16] = "";
+static volatile int8_t selectedFloorIndex = -1;
 static const char *sessionResult = "none";
+
+static int8_t deniedFloorIndex = -1;
+static uint32_t deniedFloorSeq = 0;
 
 static char ackId[24] = "none";
 static const char *ackAction = "none";
@@ -262,6 +285,16 @@ static void ledcApplyTone(uint8_t pin, uint8_t channel, uint32_t frequency) {
   (void)pin;
   ledcWriteTone(channel, (double)frequency);
 #endif
+}
+
+static void ledcRelease(uint8_t pin) {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcDetach(pin);
+#else
+  ledcDetachPin(pin);
+#endif
+  pinMode(pin, OUTPUT);
+  digitalWrite(pin, LOW);
 }
 
 static void setDoorLed(bool open) {
@@ -372,14 +405,19 @@ static void serviceMotor() {
   }
 }
 
-static void servoWriteMicroseconds(uint8_t pin, uint8_t channel, uint16_t microseconds) {
-  uint32_t duty = ((uint32_t)microseconds * 65535UL) / SERVO_PERIOD_US;
-  ledcApplyDuty(pin, channel, duty);
+static uint16_t clampServoUs(uint16_t microseconds) {
+  if (microseconds < SERVO_US_MIN_SAFE) {
+    return SERVO_US_MIN_SAFE;
+  }
+  if (microseconds > SERVO_US_MAX_SAFE) {
+    return SERVO_US_MAX_SAFE;
+  }
+  return microseconds;
 }
 
-static uint16_t interpolateUs(uint16_t closedUs, uint16_t openUs, uint16_t permille) {
-  int32_t span = (int32_t)openUs - (int32_t)closedUs;
-  return (uint16_t)((int32_t)closedUs + (span * (int32_t)permille) / 1000);
+static void servoWriteMicroseconds(uint8_t pin, uint8_t channel, uint16_t microseconds) {
+  uint32_t duty = ((uint32_t)clampServoUs(microseconds) * SERVO_DUTY_MAX) / SERVO_PERIOD_US;
+  ledcApplyDuty(pin, channel, duty);
 }
 
 static uint16_t servoUsForDegrees(uint8_t degrees) {
@@ -387,11 +425,31 @@ static uint16_t servoUsForDegrees(uint8_t degrees) {
   return (uint16_t)(SERVO_US_AT_MIN_DEG + (span * degrees) / SERVO_MAX_DEG);
 }
 
+static uint8_t doorAngleFor(bool leftLeaf, uint16_t permille) {
+  int16_t offset = (int16_t)(((uint32_t)DOOR_TRAVEL_DEG * permille) / 1000);
+  bool clockwise = leftLeaf ? DOOR_LEFT_OPENS_CW : !DOOR_LEFT_OPENS_CW;
+  int16_t rest = (int16_t)(leftLeaf ? DOOR_LEFT_CLOSED_DEG : DOOR_RIGHT_CLOSED_DEG);
+  int16_t degrees = rest + (clockwise ? offset : -offset);
+
+  if (degrees < 0) {
+    degrees = 0;
+  }
+  if (degrees > (int16_t)SERVO_MAX_DEG) {
+    degrees = (int16_t)SERVO_MAX_DEG;
+  }
+  return (uint8_t)degrees;
+}
+
 static void applyDoorPosition(uint16_t permille) {
-  uint16_t microseconds = interpolateUs(servoUsForDegrees(DOOR_CLOSED_DEG),
-                                        servoUsForDegrees(DOOR_OPEN_DEG), permille);
-  servoWriteMicroseconds(PIN_SERVO_LEFT, SERVO_LEFT_CHANNEL, microseconds);
-  servoWriteMicroseconds(PIN_SERVO_RIGHT, SERVO_RIGHT_CHANNEL, microseconds);
+  lastServoWriteAt = millis();
+  servoWriteMicroseconds(PIN_SERVO_LEFT, SERVO_LEFT_CHANNEL,
+                         servoUsForDegrees(doorAngleFor(true, permille)));
+  servoWriteMicroseconds(PIN_SERVO_RIGHT, SERVO_RIGHT_CHANNEL,
+                         servoUsForDegrees(doorAngleFor(false, permille)));
+}
+
+static bool servoFrameElapsed() {
+  return millis() - lastServoWriteAt >= SERVO_FRAME_MS;
 }
 
 static uint16_t doorPermille() {
@@ -409,6 +467,38 @@ static uint16_t doorPermille() {
   return doorState == DOOR_OPENING ? travelled : (uint16_t)(1000 - travelled);
 }
 
+static void armServos() {
+  if (servosArmed) {
+    return;
+  }
+  servosArmed = true;
+
+  uint16_t permille = doorPermille();
+
+  ledcConfigure(PIN_SERVO_LEFT, SERVO_PWM_FREQ, SERVO_PWM_BITS, SERVO_LEFT_CHANNEL);
+  servoWriteMicroseconds(PIN_SERVO_LEFT, SERVO_LEFT_CHANNEL,
+                         servoUsForDegrees(doorAngleFor(true, permille)));
+  delay(SERVO_STAGGER_MS);
+
+  ledcConfigure(PIN_SERVO_RIGHT, SERVO_PWM_FREQ, SERVO_PWM_BITS, SERVO_RIGHT_CHANNEL);
+  servoWriteMicroseconds(PIN_SERVO_RIGHT, SERVO_RIGHT_CHANNEL,
+                         servoUsForDegrees(doorAngleFor(false, permille)));
+  delay(SERVO_ARM_SETTLE_MS);
+
+  lastServoWriteAt = millis();
+  Serial.println("[servo] armed at the resting door position");
+}
+
+static void releaseServos() {
+  if (!servosArmed) {
+    return;
+  }
+  servosArmed = false;
+  ledcRelease(PIN_SERVO_LEFT);
+  ledcRelease(PIN_SERVO_RIGHT);
+  Serial.println("[servo] parked and released");
+}
+
 static bool doorOpenAuthorized() {
   if (floorAuthorized[currentFloor]) {
     return true;
@@ -423,6 +513,13 @@ static bool floorButtonsArmed() {
   return doorState != DOOR_OPENING;
 }
 
+static void armDoorHold(uint32_t now) {
+  doorOpenSince = now;
+  if (state == STATE_DOOR_OPEN) {
+    grantOpenedAt = now;
+  }
+}
+
 static void beginDoorMotion(bool opening) {
   if (opening && !doorOpenAuthorized()) {
     Serial.print("[door] open refused, no verified authorization for ");
@@ -430,7 +527,7 @@ static void beginDoorMotion(bool opening) {
     return;
   }
   if (opening && doorState == DOOR_OPEN) {
-    doorOpenSince = millis();
+    armDoorHold(millis());
     return;
   }
   if (opening && doorState == DOOR_OPENING) {
@@ -439,6 +536,8 @@ static void beginDoorMotion(bool opening) {
   if (!opening && (doorState == DOOR_CLOSED || doorState == DOOR_CLOSING)) {
     return;
   }
+
+  armServos();
 
   uint32_t now = millis();
   uint16_t permille = doorPermille();
@@ -470,14 +569,18 @@ static void serviceDoor() {
     uint32_t elapsed = now - doorMotionStartedAt;
 
     if (elapsed < DOOR_TRAVEL_MS) {
-      uint16_t travelled = (uint16_t)((elapsed * 1000UL) / DOOR_TRAVEL_MS);
-      applyDoorPosition(opening ? travelled : (uint16_t)(1000 - travelled));
+      if (servoFrameElapsed()) {
+        uint16_t travelled = (uint16_t)((elapsed * 1000UL) / DOOR_TRAVEL_MS);
+        applyDoorPosition(opening ? travelled : (uint16_t)(1000 - travelled));
+      }
       return;
     }
 
     applyDoorPosition(opening ? 1000 : 0);
     doorState = opening ? DOOR_OPEN : DOOR_CLOSED;
-    doorOpenSince = now;
+    if (opening) {
+      armDoorHold(now);
+    }
     setDoorLed(opening);
     displayDirty = true;
     Serial.println(opening ? "[door] fully open" : "[door] fully closed");
@@ -497,9 +600,16 @@ static void serviceDoor() {
     return;
   }
 
-  if (doorState == DOOR_OPEN && now - doorOpenSince >= DOOR_AUTO_CLOSE_MS) {
-    Serial.println("[door] auto close after 10s");
+  if (doorState == DOOR_OPEN && now - doorOpenSince >= DOOR_HOLD_MS) {
+    Serial.print("[door] hold elapsed after ");
+    Serial.print(DOOR_HOLD_MS / 1000);
+    Serial.println("s, closing");
     beginDoorMotion(false);
+    return;
+  }
+
+  if (servosArmed && millis() - lastServoWriteAt >= SERVO_RELEASE_MS) {
+    releaseServos();
   }
 }
 
@@ -792,8 +902,11 @@ static uint32_t remainingWindowMs() {
   if (state != STATE_DOOR_OPEN) {
     return 0;
   }
+  if (doorState == DOOR_OPENING) {
+    return DOOR_HOLD_MS;
+  }
   uint32_t elapsed = millis() - grantOpenedAt;
-  return elapsed >= GRANT_WINDOW_MS ? 0 : GRANT_WINDOW_MS - elapsed;
+  return elapsed >= DOOR_HOLD_MS ? 0 : DOOR_HOLD_MS - elapsed;
 }
 
 static bool grantIncludesFloor(const String &body, const char *key) {
@@ -851,11 +964,12 @@ static String statusJson() {
   json += ",\"current_floor\":\"";
   json += FLOOR_KEY[currentFloor];
   json += "\",\"selected_floor\":";
-  if (selectedKey[0] == '\0') {
+  int8_t chosen = selectedFloorIndex;
+  if (chosen < 0 || chosen > 2) {
     json += "null";
   } else {
     json += "\"";
-    json += selectedKey;
+    json += FLOOR_KEY[chosen];
     json += "\"";
   }
   json += ",\"session_result\":\"";
@@ -878,6 +992,16 @@ static String statusJson() {
   }
   json += "],\"buttons_enabled\":";
   json += (state != STATE_TRAVELING && floorButtonsArmed()) ? "true" : "false";
+  json += ",\"denied_floor\":";
+  if (deniedFloorIndex < 0 || deniedFloorIndex > 2) {
+    json += "null";
+  } else {
+    json += "\"";
+    json += FLOOR_KEY[deniedFloorIndex];
+    json += "\"";
+  }
+  json += ",\"denied_seq\":";
+  json += String(deniedFloorSeq);
   json += ",\"clients\":";
   json += String((unsigned)bleClientCount);
   json += ",\"emergency\":";
@@ -934,7 +1058,7 @@ static void processGrant(const String &body) {
   extractJsonString(body, "token", grantToken, sizeof(grantToken));
   extractJsonString(body, "staff", grantStaff, sizeof(grantStaff));
 
-  selectedKey[0] = '\0';
+  selectedFloorIndex = -1;
   sessionResult = "none";
   selectedFloor = currentFloor;
   displayFloor = currentFloor;
@@ -964,12 +1088,19 @@ static void processGrant(const String &body) {
 
 static void processReset() {
   ackAction = "reset";
-  selectedKey[0] = '\0';
+  selectedFloorIndex = -1;
   sessionResult = "cancelled";
   lastInputAt = millis();
-  enterIdle();
   ackOk = true;
   ackError = "none";
+
+  if (state == STATE_TRAVELING) {
+    clearGrant();
+    Serial.println("[reset] cancelled mid-trip, car will finish leveling first");
+    return;
+  }
+
+  enterIdle();
   Serial.println("[reset] session cancelled, door closing, motor stopped");
 }
 
@@ -1010,12 +1141,13 @@ static void beginMoving() {
   arrowFrameAt = segmentStartedAt;
   travelPhase = TRAVEL_MOVING;
   displayDirty = true;
+
+  publishStatus();
   motorStart(travelStep);
 
   Serial.print("[travel] door closed, moving ");
   Serial.print(travelStep > 0 ? "up to " : "down to ");
   Serial.println(FLOOR_KEY[selectedFloor]);
-  publishStatus();
 }
 
 static void requestTrip(uint8_t floor, bool autoReturn) {
@@ -1052,14 +1184,14 @@ static void beginArrivalSequence() {
 }
 
 static void finishArrival() {
+  if (!autoReturnTrip) {
+    sessionResult = "arrived";
+  }
+
   travelPhase = TRAVEL_NONE;
   state = STATE_IDLE;
   lastInputAt = millis();
   displayDirty = true;
-
-  if (!autoReturnTrip) {
-    sessionResult = "arrived";
-  }
 
   if (doorOpenAuthorized()) {
     pendingGrantClear = true;
@@ -1086,6 +1218,9 @@ static void onFloorButton(uint8_t index) {
     Serial.print(grantStaff[0] == '\0' ? "this badge" : grantStaff);
     Serial.print(": ");
     Serial.println(FLOOR_KEY[index]);
+    deniedFloorIndex = (int8_t)index;
+    deniedFloorSeq++;
+    publishStatus();
     return;
   }
   if (!floorButtonsArmed()) {
@@ -1099,8 +1234,7 @@ static void onFloorButton(uint8_t index) {
     return;
   }
 
-  strncpy(selectedKey, FLOOR_KEY[index], sizeof(selectedKey) - 1);
-  selectedKey[sizeof(selectedKey) - 1] = '\0';
+  selectedFloorIndex = (int8_t)index;
   Serial.print("[button] accepted: ");
   Serial.println(FLOOR_KEY[index]);
   requestTrip(index, false);
@@ -1196,7 +1330,7 @@ static void serviceTravel(uint32_t now) {
   displayDirty = true;
 
   if (displayFloor == selectedFloor) {
-    travelPhase = TRAVEL_SETTLING;  
+    travelPhase = TRAVEL_SETTLING;
     settleStartedAt = now;
     Serial.print("[travel] reached ");
     Serial.print(FLOOR_KEY[displayFloor]);
@@ -1228,10 +1362,12 @@ static void serviceInactivity(uint32_t now) {
 static void serviceStateMachine() {
   uint32_t now = millis();
 
-  if (state == STATE_DOOR_OPEN && now - grantOpenedAt >= GRANT_WINDOW_MS) {
+  if (state == STATE_DOOR_OPEN && now - grantOpenedAt >= DOOR_HOLD_MS) {
     sessionResult = "timeout";
     enterIdle();
-    Serial.println("[timeout] no floor selected in 30s, authorization cleared");
+    Serial.print("[timeout] no floor selected in ");
+    Serial.print(DOOR_HOLD_MS / 1000);
+    Serial.println("s, authorization cleared");
     publishStatus();
     return;
   }
@@ -1252,8 +1388,6 @@ class ServerCallbacks : public BLEServerCallbacks {
     clientConnected = true;
     Serial.print("[ble] scanner connected, clients now ");
     Serial.println((unsigned)bleClientCount);
-    // Keep advertising after the first client so further scanners (and the
-    // admin app) can join instead of being locked out by a single link.
     BLEDevice::startAdvertising();
   }
 
@@ -1288,6 +1422,11 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
 };
 
 void setup() {
+  pinMode(PIN_SERVO_LEFT, OUTPUT);
+  digitalWrite(PIN_SERVO_LEFT, LOW);
+  pinMode(PIN_SERVO_RIGHT, OUTPUT);
+  digitalWrite(PIN_SERVO_RIGHT, LOW);
+
   Serial.begin(115200);
   delay(200);
 
@@ -1313,10 +1452,7 @@ void setup() {
   stopTone();
   arrivalChimeMs = patternDurationMs(ARRIVAL_CHIME, ARRIVAL_CHIME_STEPS);
 
-  ledcConfigure(PIN_SERVO_LEFT, SERVO_PWM_FREQ, SERVO_PWM_BITS, SERVO_LEFT_CHANNEL);
-  ledcConfigure(PIN_SERVO_RIGHT, SERVO_PWM_FREQ, SERVO_PWM_BITS, SERVO_RIGHT_CHANNEL);
   doorState = DOOR_CLOSED;
-  applyDoorPosition(0);
 
   Wire.begin(PIN_OLED_SDA, PIN_OLED_SCL, OLED_I2C_HZ);
   displayReady = startDisplay();
@@ -1329,6 +1465,17 @@ void setup() {
 
   lastInputAt = millis() - IDLE_ANIMATION_MS;
   Serial.println("[boot] idle at FirstFloor, door closed, idle animation showing");
+
+  if (SERVO_TRIM_MODE) {
+    armServos();
+    Serial.println("[servo] TRIM MODE: holding the closed angle, lift disabled.");
+    Serial.println("[servo] Pull each horn off its spline and re-seat it pointing");
+    Serial.println("[servo] the way you want the doors to look when shut, then set");
+    Serial.println("[servo] SERVO_TRIM_MODE back to false and reflash.");
+    for (;;) {
+      delay(1000);
+    }
+  }
 
   BLEDevice::init(BLE_NAME);
   BLEDevice::setMTU(247);

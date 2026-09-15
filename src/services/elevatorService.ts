@@ -26,6 +26,10 @@ export type ElevatorStatus = {
   selectedFloor: FloorKey | null;
   sessionResult: ElevatorSessionResult;
   remainingMs: number;
+  /** Floor whose button was last pressed while not authorized on the active grant. */
+  deniedFloor: FloorKey | null;
+  /** Increments each time `deniedFloor` fires, so pollers can detect a new denial. */
+  deniedSeq: number;
   /** BLE clients the controller currently has connected, this device included. */
   connectedClients: number;
 };
@@ -247,6 +251,7 @@ function readFloor(value: unknown): FloorKey | null {
 function parseStatus(payload: Record<string, unknown>): ElevatorStatus {
   const remaining = Number(payload.remaining_ms);
   const clients = Number(payload.clients);
+  const deniedSeq = Number(payload.denied_seq);
   return {
     state: readStateValue(payload.state),
     doorOpen: payload.door_open === true,
@@ -254,6 +259,9 @@ function parseStatus(payload: Record<string, unknown>): ElevatorStatus {
     selectedFloor: readFloor(payload.selected_floor),
     sessionResult: readSessionResult(payload.session_result),
     remainingMs: Number.isFinite(remaining) ? Math.max(0, remaining) : 0,
+    deniedFloor: readFloor(payload.denied_floor),
+    // Firmware before this build omits "denied_seq"; treat that as "no denials yet".
+    deniedSeq: Number.isFinite(deniedSeq) ? Math.max(0, Math.trunc(deniedSeq)) : 0,
     // Firmware before the multi-client build omits "clients"; treat that as
     // "just this link".
     connectedClients: Number.isFinite(clients) ? Math.max(0, Math.trunc(clients)) : 1,

@@ -11,6 +11,10 @@ export type ElevatorStatus = {
   selectedFloor: FloorKey | null;
   sessionResult: ElevatorSessionResult;
   remainingMs: number;
+  /** Floor whose button was last pressed while not authorized on the active grant. */
+  deniedFloor: FloorKey | null;
+  /** Increments each time `deniedFloor` fires, so pollers can detect a new denial. */
+  deniedSeq: number;
   /** BLE clients the controller currently has connected, this device included. */
   connectedClients: number;
 };

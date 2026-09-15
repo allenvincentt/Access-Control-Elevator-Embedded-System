@@ -25,6 +25,7 @@ import { ShakeView } from '@/components/ui/ShakeView';
 import { colors, palette, radius, spacing, typography } from '@/constants/themeColor';
 import { getDeviceId } from '@/lib/deviceId';
 import { DENIAL_MESSAGES, errorMessage } from '@/lib/errors';
+import { announceAccessDenied, announceGuestCheckedIn, announceScanAgain, announceWelcome } from '@/lib/speech';
 import {
   FACE_MODEL_FAILURE_MESSAGES,
   FACE_PRESENCE,
@@ -244,6 +245,7 @@ export function FacialRecognitionScreen({
       if (left > 0) return;
       clearInterval(timer);
       if (phaseRef.current !== 'granted' && phaseRef.current !== 'halted') {
+        announceScanAgain();
         stop({
           title: 'Badge scan expired',
           body: 'The badge step timed out. Scan the badge again to start over.',
@@ -377,6 +379,11 @@ export function FacialRecognitionScreen({
         recordOutcome('granted');
         clearHold();
         setPhase('granted');
+        if (isGuest) {
+          announceGuestCheckedIn();
+        } else {
+          announceWelcome(result.staff.full_name);
+        }
         snackbar.show(
           isGuest
             ? `Guest checked in — ${result.staff.full_name}`
@@ -392,6 +399,9 @@ export function FacialRecognitionScreen({
       recordOutcome('denied');
 
       if (result.reason === 'SessionExpired' || result.reason === 'TooManyAttempts') {
+        if (result.reason === 'SessionExpired') {
+          announceScanAgain();
+        }
         stop({
           title: result.reason === 'SessionExpired' ? 'Badge scan expired' : 'Too many attempts',
           body: DENIAL_MESSAGES[result.reason],
@@ -419,6 +429,7 @@ export function FacialRecognitionScreen({
       tracker.current.reset();
       setProgress(0);
       setDenial({ message: DENIAL_MESSAGES[result.reason], attemptsLeft });
+      announceAccessDenied();
       pulseError();
       setPhase('denied');
       holdThenResume(FACE_PRESENCE.deniedHoldMs);
@@ -434,6 +445,7 @@ export function FacialRecognitionScreen({
       tracker.current.reset();
       setProgress(0);
       setDenial({ message, attemptsLeft: null });
+      announceAccessDenied();
       pulseError();
       setPhase('denied');
       holdThenResume(FACE_PRESENCE.deniedHoldMs);
