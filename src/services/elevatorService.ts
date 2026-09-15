@@ -200,6 +200,18 @@ async function readStatusPayload(): Promise<Record<string, unknown>> {
   }
 }
 
+/**
+ * Has the controller actually reached a verdict on this command?
+ *
+ * `ack_ok: false` paired with `ack_error: "none"` is never a real outcome —
+ * every refusal names its reason. It is the uninitialised state, briefly
+ * visible between the controller stamping the command id and finishing the
+ * work, so treat it as "not answered yet" rather than as a refusal.
+ */
+function ackSettled(status: Record<string, unknown>): boolean {
+  return status.ack_ok === true || status.ack_error !== 'none';
+}
+
 async function sendCommand(command: Record<string, unknown>): Promise<Record<string, unknown>> {
   const cmdId = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
   try {
@@ -215,7 +227,7 @@ async function sendCommand(command: Record<string, unknown>): Promise<Record<str
 
   for (let attempt = 0; attempt < ACK_ATTEMPTS; attempt++) {
     const status = await readStatusPayload();
-    if (status.ack_id === cmdId) {
+    if (status.ack_id === cmdId && ackSettled(status)) {
       return status;
     }
     await delay(ACK_INTERVAL_MS);

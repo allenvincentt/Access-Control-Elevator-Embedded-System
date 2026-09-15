@@ -38,9 +38,10 @@ static const char FLOOR_DIGIT[3] = {'1', '2', '3'};
 static const char *FLOOR_LABEL[3] = {"MAIN LOBBY", "SECOND FLOOR", "THIRD FLOOR"};
 static const uint8_t LOBBY_FLOOR = 0;
 
-static const uint32_t DOOR_HOLD_MS = 30000;
+static const uint32_t DOOR_BOARDING_HOLD_MS = 8000;
+static const uint32_t DOOR_ARRIVAL_HOLD_MS = 5000;
 static const uint32_t DOOR_TRAVEL_MS = 900;
-static const uint32_t INACTIVITY_RETURN_MS = 20000;
+static const uint32_t INACTIVITY_RETURN_MS = 30000;
 static const uint32_t FLOOR_TRAVEL_MS = 1400;
 static const uint32_t MOTOR_STOP_DELAY_MS = 700;
 static const uint32_t MOTOR_KICK_MS = 150;
@@ -98,7 +99,7 @@ static const uint8_t CREATURE_EYE_ROW = 4;
 static const uint8_t CREATURE_LEG_LEFT_COL = 3;
 static const uint8_t CREATURE_LEG_RIGHT_COL = 11;
 static const uint16_t CREATURE_EYE_MASK = 0x1818;
-
+  
 static const uint8_t CREATURE_WALK_FRAMES = 8;
 static const uint32_t CREATURE_FRAME_MS = 120;
 static const uint32_t CREATURE_WALK_MS = 4800;
@@ -600,9 +601,11 @@ static void serviceDoor() {
     return;
   }
 
-  if (doorState == DOOR_OPEN && now - doorOpenSince >= DOOR_HOLD_MS) {
+  uint32_t holdMs = (state == STATE_DOOR_OPEN) ? DOOR_BOARDING_HOLD_MS
+                                               : DOOR_ARRIVAL_HOLD_MS;
+  if (doorState == DOOR_OPEN && now - doorOpenSince >= holdMs) {
     Serial.print("[door] hold elapsed after ");
-    Serial.print(DOOR_HOLD_MS / 1000);
+    Serial.print(holdMs / 1000);
     Serial.println("s, closing");
     beginDoorMotion(false);
     return;
@@ -881,6 +884,7 @@ static void enterIdle() {
   travelPhase = TRAVEL_NONE;
   travelStep = 0;
   autoReturnTrip = false;
+  lastInputAt = millis();
   motorStop();
   displayFloor = currentFloor;
   displayDirty = true;
@@ -903,10 +907,10 @@ static uint32_t remainingWindowMs() {
     return 0;
   }
   if (doorState == DOOR_OPENING) {
-    return DOOR_HOLD_MS;
+    return DOOR_BOARDING_HOLD_MS;
   }
   uint32_t elapsed = millis() - grantOpenedAt;
-  return elapsed >= DOOR_HOLD_MS ? 0 : DOOR_HOLD_MS - elapsed;
+  return elapsed >= DOOR_BOARDING_HOLD_MS ? 0 : DOOR_BOARDING_HOLD_MS - elapsed;
 }
 
 static bool grantIncludesFloor(const String &body, const char *key) {
@@ -1104,16 +1108,23 @@ static void processReset() {
   Serial.println("[reset] session cancelled, door closing, motor stopped");
 }
 
+static void commitAck(const char *cmdId) {
+  strncpy(ackId, cmdId, sizeof(ackId) - 1);
+  ackId[sizeof(ackId) - 1] = '\0';
+}
+
 static void processCommand(const String &body) {
   char action[16];
+  char cmdId[24];
   extractJsonString(body, "action", action, sizeof(action));
-  extractJsonString(body, "cmd_id", ackId, sizeof(ackId));
+  extractJsonString(body, "cmd_id", cmdId, sizeof(cmdId));
 
   if (!commandAuthorized(body)) {
     ackAction = "denied";
     ackOk = false;
     ackError = "unauthorized";
     Serial.println("[command] rejected: bad device key");
+    commitAck(cmdId);
     publishStatus();
     return;
   }
@@ -1130,6 +1141,7 @@ static void processCommand(const String &body) {
     Serial.println(action);
   }
 
+  commitAck(cmdId);
   publishStatus();
 }
 
@@ -1355,18 +1367,20 @@ static void serviceInactivity(uint32_t now) {
   }
 
   lastInputAt = now;
-  Serial.println("[inactivity] 20s without input, returning to FirstFloor");
+  Serial.print("[inactivity] ");
+  Serial.print(INACTIVITY_RETURN_MS / 1000);
+  Serial.println("s without input, returning to FirstFloor");
   requestTrip(LOBBY_FLOOR, true);
 }
 
 static void serviceStateMachine() {
   uint32_t now = millis();
 
-  if (state == STATE_DOOR_OPEN && now - grantOpenedAt >= DOOR_HOLD_MS) {
+  if (state == STATE_DOOR_OPEN && now - grantOpenedAt >= DOOR_BOARDING_HOLD_MS) {
     sessionResult = "timeout";
     enterIdle();
     Serial.print("[timeout] no floor selected in ");
-    Serial.print(DOOR_HOLD_MS / 1000);
+    Serial.print(DOOR_BOARDING_HOLD_MS / 1000);
     Serial.println("s, authorization cleared");
     publishStatus();
     return;
