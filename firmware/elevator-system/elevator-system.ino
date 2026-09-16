@@ -183,6 +183,7 @@ enum DoorState {
 
 static void publishStatus();
 static void beginDoorMotion(bool opening);
+static void armDoorHold(uint32_t now);
 static void beginMoving();
 static void requestTrip(uint8_t floor, bool autoReturn);
 
@@ -370,10 +371,16 @@ static void setEmergency(bool active) {
   displayDirty = true;
   if (active) {
     startTone(EMERGENCY_ALARM, EMERGENCY_ALARM_STEPS, true);
-    Serial.println("[emergency] alarm ON");
+    Serial.println("[emergency] alarm ON, buttons locked out");
+    if (travelPhase == TRAVEL_NONE || travelPhase == TRAVEL_AWAIT_DOOR) {
+      beginDoorMotion(true);
+    }
   } else {
     stopTone();
-    Serial.println("[emergency] alarm cleared");
+    Serial.println("[emergency] alarm cleared, buttons live");
+    if (doorState == DOOR_OPEN) {
+      armDoorHold(millis());
+    }
   }
   publishStatus();
 }
@@ -522,7 +529,11 @@ static void armDoorHold(uint32_t now) {
 }
 
 static void beginDoorMotion(bool opening) {
-  if (opening && !doorOpenAuthorized()) {
+  if (!opening && emergencyActive) {
+    Serial.println("[door] close refused, emergency active");
+    return;
+  }
+  if (opening && !emergencyActive && !doorOpenAuthorized()) {
     Serial.print("[door] open refused, no verified authorization for ");
     Serial.println(FLOOR_KEY[currentFloor]);
     return;
@@ -603,7 +614,7 @@ static void serviceDoor() {
 
   uint32_t holdMs = (state == STATE_DOOR_OPEN) ? DOOR_BOARDING_HOLD_MS
                                                : DOOR_ARRIVAL_HOLD_MS;
-  if (doorState == DOOR_OPEN && now - doorOpenSince >= holdMs) {
+  if (doorState == DOOR_OPEN && !emergencyActive && now - doorOpenSince >= holdMs) {
     Serial.print("[door] hold elapsed after ");
     Serial.print(holdMs / 1000);
     Serial.println("s, closing");
@@ -995,7 +1006,7 @@ static String statusJson() {
     json += "\"";
   }
   json += "],\"buttons_enabled\":";
-  json += (state != STATE_TRAVELING && floorButtonsArmed()) ? "true" : "false";
+  json += (!emergencyActive && state != STATE_TRAVELING && floorButtonsArmed()) ? "true" : "false";
   json += ",\"denied_floor\":";
   if (deniedFloorIndex < 0 || deniedFloorIndex > 2) {
     json += "null";
@@ -1208,6 +1219,9 @@ static void finishArrival() {
   if (doorOpenAuthorized()) {
     pendingGrantClear = true;
     beginDoorMotion(true);
+  } else if (emergencyActive) {
+    Serial.println("[door] emergency active, opening without 2FA");
+    beginDoorMotion(true);
   } else {
     Serial.println("[door] staying closed, 2FA not completed for this floor");
     if (autoReturnTrip) {
@@ -1266,6 +1280,12 @@ static void onEmergencyButton() {
 
 static void onButtonPressed(uint8_t index) {
   lastInputAt = millis();
+
+  if (emergencyActive && index != BUTTON_EMERGENCY_INDEX) {
+    Serial.print("[button] locked out, emergency active: ");
+    Serial.println(index == BUTTON_DOOR_INDEX ? "door" : FLOOR_KEY[index]);
+    return;
+  }
 
   if (index < 3) {
     onFloorButton(index);

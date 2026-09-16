@@ -1,5 +1,5 @@
 import { BlurView } from 'expo-blur';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -50,6 +50,8 @@ const BLUR_INTENSITY = 22;
 const SHEET_DISMISS_DISTANCE = 110;
 const SHEET_DISMISS_VELOCITY = 800;
 
+const ModalNestingContext = createContext(false);
+
 export function Modal({
   visible,
   onClose,
@@ -67,7 +69,9 @@ export function Modal({
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const blurTarget = useBlurTarget();
+  const isNested = useContext(ModalNestingContext);
   const asSheet = variant === 'sheet' || (variant === 'auto' && width < SHEET_BREAKPOINT);
+  const showBackdropBlur = !(isNested && Platform.OS === 'android');
 
   const [mounted, setMounted] = useState(visible);
   const progress = useSharedValue(0);
@@ -171,57 +175,61 @@ export function Modal({
 
   return (
     <RNModal visible transparent animationType="none" statusBarTranslucent onRequestClose={onClose}>
-      <View style={styles.root}>
-        <View style={styles.backdrop} pointerEvents="box-none">
-          {/* Kept at a constant opacity — animating this layer's opacity is what
-              stops Chromium from compositing `backdrop-filter` on first paint. */}
-          <BlurView
-            style={StyleSheet.absoluteFill}
-            tint="dark"
-            intensity={BLUR_INTENSITY}
-            blurTarget={blurTarget ?? undefined}
-            blurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
-          />
-          <Animated.View style={[StyleSheet.absoluteFill, styles.backdropScrim, backdropScrimStyle]} />
-          <Pressable
-            style={StyleSheet.absoluteFill}
-            accessibilityRole="button"
-            accessibilityLabel="Dismiss"
-            onPress={dismissOnBackdropPress ? onClose : undefined}
-          />
-        </View>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : Platform.OS === 'android' ? 'height' : undefined}
-          style={[styles.avoider, asSheet ? styles.avoiderSheet : styles.avoiderCenter]}
-          pointerEvents="box-none"
-        >
-          <Animated.View
-            style={[
-              asSheet ? styles.sheet : styles.card,
-              asSheet
-                ? { paddingBottom: insets.bottom + spacing.base, maxHeight: '92%' }
-                : { marginTop: insets.top, marginBottom: insets.bottom, maxHeight: '86%' },
-              contentAnimStyle,
-              contentStyle,
-            ]}
-          >
-            {asSheet ? (
-              <GestureDetector gesture={dragGesture}>
-                <View
-                  style={styles.grabberArea}
-                  accessibilityRole="adjustable"
-                  accessibilityLabel="Drag to dismiss"
-                >
-                  <View style={styles.grabber} />
-                </View>
-              </GestureDetector>
+      <ModalNestingContext.Provider value={true}>
+        <View style={styles.root}>
+          <View style={styles.backdrop} pointerEvents="box-none">
+            {/* Kept at a constant opacity — animating this layer's opacity is what
+                stops Chromium from compositing `backdrop-filter` on first paint. */}
+            {showBackdropBlur ? (
+              <BlurView
+                style={StyleSheet.absoluteFill}
+                tint="dark"
+                intensity={BLUR_INTENSITY}
+                blurTarget={blurTarget ?? undefined}
+                blurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
+              />
             ) : null}
-            {header}
-            {body}
-            {footer ? <View style={styles.footer}>{footer}</View> : null}
-          </Animated.View>
-        </KeyboardAvoidingView>
-      </View>
+            <Animated.View style={[StyleSheet.absoluteFill, styles.backdropScrim, backdropScrimStyle]} />
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss"
+              onPress={dismissOnBackdropPress ? onClose : undefined}
+            />
+          </View>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : Platform.OS === 'android' ? 'height' : undefined}
+            style={[styles.avoider, asSheet ? styles.avoiderSheet : styles.avoiderCenter]}
+            pointerEvents="box-none"
+          >
+            <Animated.View
+              style={[
+                asSheet ? styles.sheet : styles.card,
+                asSheet
+                  ? { paddingBottom: insets.bottom + spacing.base, maxHeight: '92%' }
+                  : { marginTop: insets.top, marginBottom: insets.bottom, maxHeight: '86%' },
+                contentAnimStyle,
+                contentStyle,
+              ]}
+            >
+              {asSheet ? (
+                <GestureDetector gesture={dragGesture}>
+                  <View
+                    style={styles.grabberArea}
+                    accessibilityRole="adjustable"
+                    accessibilityLabel="Drag to dismiss"
+                  >
+                    <View style={styles.grabber} />
+                  </View>
+                </GestureDetector>
+              ) : null}
+              {header}
+              {body}
+              {footer ? <View style={styles.footer}>{footer}</View> : null}
+            </Animated.View>
+          </KeyboardAvoidingView>
+        </View>
+      </ModalNestingContext.Provider>
     </RNModal>
   );
 }

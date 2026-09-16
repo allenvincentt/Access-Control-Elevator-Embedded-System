@@ -13,7 +13,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   GlassLensView,
-  GlassMaterial,
   GlassPanel,
   GlassPressable,
   useAnimatedValue,
@@ -184,6 +183,56 @@ export function SideBar({
     }
   }, [activeSection, compact, railInteraction]);
 
+  const mobileLens = useGlassLens('x');
+  const [mobileTabLayouts, setMobileTabLayouts] = useState<
+    Partial<Record<AdminSection, ItemLocalLayout>>
+  >({});
+  const previousMobileSection = useRef<AdminSection | null>(null);
+
+  const registerMobileTabLayout = useCallback(
+    (section: AdminSection, event: LayoutChangeEvent) => {
+      const { x, y, width: itemWidth, height } = event.nativeEvent.layout;
+      setMobileTabLayouts((current) => {
+        const previous = current[section];
+        if (
+          previous &&
+          previous.x === x &&
+          previous.y === y &&
+          previous.width === itemWidth &&
+          previous.height === height
+        ) {
+          return current;
+        }
+        return { ...current, [section]: { x, y, width: itemWidth, height } };
+      });
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!compact) {
+      return;
+    }
+    const layout = mobileTabLayouts[activeSection];
+    if (!layout) {
+      return;
+    }
+
+    const target: GlassLensTarget = {
+      x: layout.x,
+      y: layout.y,
+      width: layout.width,
+      height: layout.height,
+    };
+
+    if (previousMobileSection.current !== activeSection) {
+      previousMobileSection.current = activeSection;
+      mobileLens.moveTo(target);
+    } else {
+      mobileLens.resize(target);
+    }
+  }, [activeSection, compact, mobileTabLayouts, mobileLens]);
+
   if (compact) {
     return (
       <GlassPanel
@@ -196,12 +245,21 @@ export function SideBar({
         style={[styles.mobileShell, { bottom: Math.max(safeAreaBottom, 10) + 10 }, BRAND_SHADOW_COMPACT]}>
         <View pointerEvents="none" style={styles.mobileShellEdge} />
         <View style={styles.mobileRow}>
+          <GlassLensView
+            lens={mobileLens}
+            radius={TAB_BADGE_RADIUS}
+            variant="chip"
+            tint={colors.primaryTint}
+            backgroundHint={colors.background}
+            blurEnabled={false}
+          />
           {adminNavFlat.map((item) => (
             <MobileNavTab
               key={item.section}
               item={item}
               active={activeSection === item.section}
               onPress={() => onNavigate(item.section)}
+              onLayout={(event) => registerMobileTabLayout(item.section, event)}
             />
           ))}
         </View>
@@ -348,10 +406,12 @@ function MobileNavTab({
   item,
   active,
   onPress,
+  onLayout,
 }: {
   item: AdminNavItem;
   active: boolean;
   onPress: () => void;
+  onLayout: (event: LayoutChangeEvent) => void;
 }) {
   const interaction = useGlassInteraction();
   const activeProgress = useAnimatedValue(active ? 1 : 0);
@@ -367,7 +427,6 @@ function MobileNavTab({
 
   const rest = activeProgress.interpolate({ inputRange: [0, 1], outputRange: [1, 0] });
   const scale = interaction.press.interpolate({ inputRange: [0, 1], outputRange: [1, 0.92] });
-  const badgeScale = activeProgress.interpolate({ inputRange: [0, 1], outputRange: [0.8, 1] });
   const labelColor = activeProgress.interpolate({
     inputRange: [0, 1],
     outputRange: [colors.textMuted, colors.primary],
@@ -379,27 +438,13 @@ function MobileNavTab({
       accessibilityLabel={item.label}
       accessibilityState={{ selected: active }}
       onPress={onPress}
+      onLayout={onLayout}
       onHoverIn={interaction.handlers.onHoverIn}
       onHoverOut={interaction.handlers.onHoverOut}
       onPressIn={interaction.handlers.onPressIn}
       onPressOut={interaction.handlers.onPressOut}
       style={styles.mobileTabPress}>
       <Animated.View style={[styles.mobileTab, { transform: [{ scale }] }]}>
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.mobileTabBadge,
-            { opacity: activeProgress, transform: [{ scale: badgeScale }] },
-          ]}>
-          <View style={styles.mobileTabBadgeFill} />
-          <GlassMaterial
-            variant="chip"
-            radius={TAB_BADGE_RADIUS}
-            backgroundHint={colors.background}
-            blurEnabled={false}
-          />
-        </Animated.View>
-
         <View style={styles.mobileTabIcon}>
           <Animated.View style={[styles.mobileTabIconLayer, { opacity: rest }]}>
             <Icon name={item.icon} size={TAB_ICON_SIZE} color={colors.textMuted} />
@@ -517,6 +562,7 @@ const styles = StyleSheet.create({
     borderColor: colors.borderStrong,
   },
   mobileRow: {
+    position: 'relative',
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 4,
@@ -532,19 +578,6 @@ const styles = StyleSheet.create({
     gap: 2,
     paddingHorizontal: 2,
     borderRadius: TAB_BADGE_RADIUS,
-  },
-  mobileTabBadge: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    left: 3,
-    right: 3,
-    borderRadius: TAB_BADGE_RADIUS,
-    overflow: 'hidden',
-  },
-  mobileTabBadgeFill: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: colors.primaryTint,
   },
   mobileTabIcon: {
     width: TAB_ICON_SIZE + 4,

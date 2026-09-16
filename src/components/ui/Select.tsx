@@ -21,6 +21,7 @@ type BaseProps = {
   placeholder?: string;
   containerStyle?: StyleProp<ViewStyle>;
   sheetTitle?: string;
+  disabled?: boolean;
 };
 
 type SingleProps = BaseProps & {
@@ -47,6 +48,7 @@ export function Select(props: SelectProps) {
     placeholder = 'Select an option',
     containerStyle,
     sheetTitle,
+    disabled = false,
   } = props;
   const [open, setOpen] = useState(false);
   const hasError = Boolean(error);
@@ -76,9 +78,10 @@ export function Select(props: SelectProps) {
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={label}
-        accessibilityState={{ expanded: open }}
+        accessibilityState={{ expanded: open, disabled }}
+        disabled={disabled}
         onPress={() => setOpen(true)}
-        style={[styles.field, hasError && styles.fieldError]}
+        style={[styles.field, hasError && styles.fieldError, disabled && styles.fieldDisabled]}
       >
         {icon ? (
           <Icon
@@ -180,6 +183,9 @@ const styles = StyleSheet.create({
   fieldError: {
     borderColor: colors.danger,
     backgroundColor: colors.dangerTint,
+  },
+  fieldDisabled: {
+    opacity: 0.6,
   },
   leadingIcon: {
     marginTop: 1,

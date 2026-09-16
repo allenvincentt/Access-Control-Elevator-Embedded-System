@@ -386,6 +386,7 @@ function StaffFormModal({
           onChange={(value) => set("role", value as StaffRoleKey)}
           placeholder="Select a role"
           sheetTitle="Staff role"
+          disabled={isEdit}
           helperText={
             isGuest
               ? "Guests pass on the badge scan alone. Their face is captured at the door, not matched."
