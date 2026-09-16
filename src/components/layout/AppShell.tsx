@@ -1,23 +1,13 @@
 import { useCallback, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import Animated from 'react-native-reanimated';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { StyleSheet, useWindowDimensions, View } from 'react-native';
 
-import { useInteraction } from '@/components/common/animations';
 import { useSnackbar } from '@/components/common/Snackbar';
 import { HintRow } from '@/components/HintRow';
 import { Screen } from '@/components/layout/Screen';
-import { Icon, type IconName } from '@/components/ui/Icon';
+import { SideBar } from '@/components/layout/SideBar';
 import { GeneralButton } from '@/components/ui/buttons/GeneralButton';
-import {
-  colors,
-  fontFamily,
-  palette,
-  radius,
-  shadow,
-  spacing,
-  typography,
-} from '@/constants/themeColor';
+import type { AdminSection } from '@/constants/adminNav';
+import { layout, palette, spacing } from '@/constants/themeColor';
 import { useAuth } from '@/hooks/useAuth';
 import { useStaff } from '@/hooks/useStaff';
 import { errorMessage } from '@/lib/errors';
@@ -36,8 +26,6 @@ import {
 } from '@/app/auth/StaffCreateEditModal';
 import { FaceEnrollmentScreen } from '@/app/auth/scanner-screens/FaceEnrollmentScreen';
 
-type AdminTab = 'home' | 'logs' | 'staff' | 'me';
-
 type StaffModalState = { mode: 'create' } | { mode: 'edit'; member: StaffRow } | null;
 
 type EnrollmentState =
@@ -45,82 +33,21 @@ type EnrollmentState =
   | { kind: 'reenrol'; member: StaffRow }
   | null;
 
-const TABS: { key: AdminTab; label: string; icon: IconName }[] = [
-  { key: 'home', label: 'Home', icon: 'home' },
-  { key: 'logs', label: 'Logs', icon: 'logs' },
-  { key: 'staff', label: 'Staff', icon: 'staff' },
-  { key: 'me', label: 'Me', icon: 'me' },
-];
-
-function NavTab({
-  tab,
-  selected,
-  onPress,
-}: {
-  tab: { key: AdminTab; label: string; icon: IconName };
-  selected: boolean;
-  onPress: () => void;
-}) {
-  const { animatedStyle, handlers } = useInteraction({ hoverLift: 2, pressScale: 0.9 });
-  return (
-    <Animated.View style={[styles.tab, animatedStyle]}>
-      <Pressable
-        accessibilityRole="tab"
-        accessibilityLabel={tab.label}
-        accessibilityState={{ selected }}
-        onPress={onPress}
-        onHoverIn={handlers.onHoverIn}
-        onHoverOut={handlers.onHoverOut}
-        onPressIn={handlers.onPressIn}
-        onPressOut={handlers.onPressOut}
-        onFocus={handlers.onFocus}
-        onBlur={handlers.onBlur}
-        style={styles.tabPress}
-      >
-        <View style={[styles.tabInner, selected && styles.tabInnerActive]}>
-          <Icon name={tab.icon} size={22} color={selected ? colors.primary : colors.textMuted} />
-        </View>
-        <Text style={[styles.tabLabel, selected && styles.tabLabelActive]} numberOfLines={1}>
-          {tab.label}
-        </Text>
-        {selected ? <View style={styles.tabDot} /> : null}
-      </Pressable>
-    </Animated.View>
-  );
-}
-
-function BottomNav({
-  active,
-  onChange,
-}: {
-  active: AdminTab;
-  onChange: (tab: AdminTab) => void;
-}) {
-  const insets = useSafeAreaInsets();
-
-  const renderTab = (tab: (typeof TABS)[number]) => (
-    <NavTab key={tab.key} tab={tab} selected={active === tab.key} onPress={() => onChange(tab.key)} />
-  );
-
-  return (
-    <View style={[styles.navHost, { paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
-      <View style={styles.navBar}>
-        <View pointerEvents="none" style={styles.navSheen} />
-        <View style={styles.navSide}>{TABS.map(renderTab)}</View>
-      </View>
-    </View>
-  );
-}
-
 export function AppShell() {
   const { profile, isAdmin, signOut } = useAuth();
   const { createStaff, updateStaff, enrollFace, photoUrls, refresh } = useStaff();
   const snackbar = useSnackbar();
 
-  const [tab, setTab] = useState<AdminTab>('home');
+  const { width } = useWindowDimensions();
+  const compact = width < layout.compactNavigation;
+
+  const [tab, setTab] = useState<AdminSection>('home');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [staffModal, setStaffModal] = useState<StaffModalState>(null);
   const [enrollment, setEnrollment] = useState<EnrollmentState>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  const toggleSidebar = useCallback(() => setSidebarCollapsed((current) => !current), []);
 
   const openCreate = useCallback(() => {
     setTab('staff');
@@ -312,7 +239,15 @@ export function AppShell() {
   const editingMember = staffModal?.mode === 'edit' ? staffModal.member : undefined;
 
   return (
-    <View style={styles.root}>
+    <View style={[styles.root, compact ? styles.rootCompact : styles.rootWide]}>
+      <SideBar
+        activeSection={tab}
+        onNavigate={setTab}
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={toggleSidebar}
+        onSignOut={() => void signOut()}
+      />
+
       <View style={styles.content}>
         {tab === 'home' ? <HomeScreen onViewLogs={() => setTab('logs')} /> : null}
         {tab === 'logs' ? <LogsScreen /> : null}
@@ -321,8 +256,6 @@ export function AppShell() {
         ) : null}
         {tab === 'me' ? <MeScreen /> : null}
       </View>
-
-      <BottomNav active={tab} onChange={setTab} />
 
       <StaffCreateEditModal
         visible={staffModal != null}
@@ -345,6 +278,12 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: palette.white,
   },
+  rootWide: {
+    flexDirection: 'row',
+  },
+  rootCompact: {
+    flexDirection: 'column',
+  },
   fallback: {
     flex: 1,
     justifyContent: 'center',
@@ -353,80 +292,6 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
     backgroundColor: palette.white,
-  },
-  navHost: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    alignItems: 'center',
-    paddingHorizontal: spacing.base,
-    pointerEvents: 'box-none',
-  },
-  navBar: {
-    width: '100%',
-    maxWidth: 460,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.sm,
-    height: 66,
-    borderRadius: radius.pill,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    ...shadow.lg,
-  },
-  navSheen: {
-    position: 'absolute',
-    top: 0,
-    left: '12%',
-    right: '12%',
-    height: 1,
-    backgroundColor: colors.surfaceAlt,
-  },
-  navSide: {
-    flexDirection: 'row',
-    flex: 1,
-    justifyContent: 'space-around',
-  },
-  tab: {
-    minWidth: 48,
-  },
-  tabPress: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 2,
-    paddingVertical: spacing.xs,
-  },
-  tabDot: {
-    marginTop: 1,
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: colors.primary,
-  },
-  tabInner: {
-    width: 40,
-    height: 30,
-    borderRadius: radius.pill,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  tabInnerActive: {
-    backgroundColor: colors.primaryTint,
-  },
-  tabLabel: {
-    ...typography.caption,
-    fontFamily: fontFamily.semibold,
-    fontWeight: '600',
-    fontSize: 11,
-    color: colors.textMuted,
-  },
-  tabLabelActive: {
-    color: colors.primary,
-    fontFamily: fontFamily.bold,
-    fontWeight: '700',
   },
 });
 

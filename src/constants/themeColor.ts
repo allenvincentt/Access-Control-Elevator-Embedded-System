@@ -211,6 +211,7 @@ export const layout = {
   bottomNavHeight: 64,
   bottomNavClearance: 108,
   minTouchTarget: 48,
+  compactNavigation: 900,
 } as const;
 
 export const theme = {

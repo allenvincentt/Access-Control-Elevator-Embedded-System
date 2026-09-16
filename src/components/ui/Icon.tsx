@@ -10,6 +10,7 @@ export const GLYPHS = {
   add: 'add',
   back: 'arrow_back_ios_new',
   close: 'close',
+  chevronLeft: 'chevron_left',
   chevronRight: 'chevron_right',
   chevronDown: 'expand_more',
   chevronUp: 'expand_less',

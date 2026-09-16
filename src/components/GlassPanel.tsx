@@ -14,6 +14,7 @@ import {
   Platform,
   Pressable,
   StyleSheet,
+  View,
   type AccessibilityRole,
   type AccessibilityState,
   type LayoutChangeEvent,
@@ -21,21 +22,31 @@ import {
   type ViewStyle,
 } from 'react-native';
 
-import { DefaultTheme } from /*@constants/defaultTheme i just copied this file from the original code, but you should replace it with your actual theme import*/;
 import {
+  bubbleStyles,
   GlassGradients,
   GlassMaterials,
   GlassMotion,
   glassStyles,
   glassToneProgress,
+  LiquidBubbleFields,
+  LiquidBubbleGradients,
+  LiquidBubbleMetrics,
+  LiquidBubbleMotion,
+  LiquidBubblePillGradients,
+  LiquidBubbleTints,
+  LiquidBubbleTones,
   resolveGlassTone,
+  type BubbleTint,
   type GlassTone,
   type GlassVariant,
+  type LiquidBubbleSeed,
 } from '@/constants/glassTheme';
+import { colors } from '@/constants/themeColor';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
-const BASE_BACKGROUND = DefaultTheme.colors.background;
+const BASE_BACKGROUND = colors.background;
 
 type GlassRadius = ViewStyle['borderRadius'];
 type GlassAnimatedNumber = number | Animated.Value | Animated.AnimatedInterpolation<number>;
@@ -94,8 +105,13 @@ export function useGlassEnvironment(backgroundHint?: string): GlassEnvironmentVa
   }, [environment, backgroundHint]);
 }
 
+export function useAnimatedValue(initial: number): Animated.Value {
+  const [value] = useState(() => new Animated.Value(initial));
+  return value;
+}
+
 function useToneValue(toneProgress: number) {
-  const value = useRef(new Animated.Value(toneProgress)).current;
+  const value = useAnimatedValue(toneProgress);
 
   useEffect(() => {
     Animated.timing(value, {
@@ -130,9 +146,9 @@ export function useGlassInteraction(options?: {
   const disabled = options?.disabled ?? false;
   const shimmerOnPress = options?.shimmerOnPress ?? true;
 
-  const hover = useRef(new Animated.Value(0)).current;
-  const press = useRef(new Animated.Value(0)).current;
-  const shimmer = useRef(new Animated.Value(0)).current;
+  const hover = useAnimatedValue(0);
+  const press = useAnimatedValue(0);
+  const shimmer = useAnimatedValue(0);
 
   const triggerShimmer = useCallback(() => {
     shimmer.stopAnimation();
@@ -237,13 +253,13 @@ function sameTarget(a: GlassLensTarget | null, b: GlassLensTarget | null) {
 }
 
 export function useGlassLens(axis: 'x' | 'y' = 'x'): GlassLensController {
-  const x = useRef(new Animated.Value(0)).current;
-  const y = useRef(new Animated.Value(0)).current;
-  const rawWidth = useRef(new Animated.Value(0)).current;
-  const rawHeight = useRef(new Animated.Value(0)).current;
-  const travel = useRef(new Animated.Value(0)).current;
-  const stretch = useRef(new Animated.Value(0)).current;
-  const ready = useRef(new Animated.Value(0)).current;
+  const x = useAnimatedValue(0);
+  const y = useAnimatedValue(0);
+  const rawWidth = useAnimatedValue(0);
+  const rawHeight = useAnimatedValue(0);
+  const travel = useAnimatedValue(0);
+  const stretch = useAnimatedValue(0);
+  const ready = useAnimatedValue(0);
   const settled = useRef<GlassLensTarget | null>(null);
 
   const horizontal = axis === 'x';
@@ -430,6 +446,319 @@ export function useLensMagnify(
       extrapolate: 'clamp',
     });
   }, [lens, layout, axis]);
+}
+
+export type LiquidBubbleProps = {
+  size: number;
+  tint?: BubbleTint;
+  backgroundHint?: string;
+  contactShadow?: boolean;
+  cast?: boolean;
+  opacity?: GlassAnimatedNumber;
+  style?: StyleProp<ViewStyle>;
+};
+
+export function LiquidBubble({
+  size,
+  tint = 'iridescent',
+  backgroundHint,
+  contactShadow = true,
+  cast = true,
+  opacity = 1,
+  style,
+}: LiquidBubbleProps) {
+  const { tone } = useGlassEnvironment(backgroundHint);
+  const spec = LiquidBubbleTones[tone];
+  const hue = LiquidBubbleGradients[tint];
+
+  const radius = size / 2;
+  const catchLight = LiquidBubbleMetrics.catchLight;
+  const contact = LiquidBubbleMetrics.contact;
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[bubbleStyles.bubble, { width: size, height: size, opacity }, style]}>
+      {contactShadow && (
+        <View
+          style={[
+            bubbleStyles.contact,
+            LiquidBubbleGradients.contact,
+            {
+              width: size * contact.width,
+              height: size * contact.height,
+              left: size * ((1 - contact.width) / 2),
+              top: size * contact.top,
+              borderRadius: (size * contact.height) / 2,
+            },
+          ]}
+        />
+      )}
+
+      <View
+        style={[
+          bubbleStyles.disc,
+          {
+            borderRadius: radius,
+            shadowColor: spec.shadowColor,
+            shadowOpacity: cast ? spec.shadowOpacity : 0,
+            shadowRadius: spec.shadowRadius,
+            shadowOffset: { width: 0, height: size * 0.06 },
+            elevation: cast ? spec.elevation : 0,
+          },
+        ]}>
+        <View style={[bubbleStyles.layer, hue, { opacity: spec.iridescence, borderRadius: radius }]} />
+        <View style={[bubbleStyles.layer, LiquidBubbleGradients.core, { opacity: spec.core, borderRadius: radius }]} />
+        <View style={[bubbleStyles.layer, LiquidBubbleGradients.shell, { opacity: spec.shell, borderRadius: radius }]} />
+        <View
+          style={[
+            bubbleStyles.layer,
+            LiquidBubbleGradients.refraction,
+            { opacity: spec.refraction, borderRadius: radius },
+          ]}
+        />
+        <View
+          style={[bubbleStyles.layer, LiquidBubbleGradients.bounce, { opacity: spec.bounce, borderRadius: radius }]}
+        />
+        <View
+          style={[
+            bubbleStyles.layer,
+            LiquidBubbleGradients.specular,
+            { opacity: spec.specular, borderRadius: radius },
+          ]}
+        />
+        <View
+          style={[
+            bubbleStyles.catchLight,
+            LiquidBubbleGradients.catchLight,
+            {
+              width: size * catchLight.width,
+              height: size * catchLight.height,
+              left: size * catchLight.left,
+              top: size * catchLight.top,
+              borderRadius: (size * catchLight.height) / 2,
+              transform: [{ rotate: catchLight.rotate }],
+            },
+          ]}
+        />
+        <View style={[bubbleStyles.rim, { borderColor: spec.border, borderRadius: radius }]} />
+      </View>
+    </Animated.View>
+  );
+}
+
+export type LiquidBubbleSkinProps = {
+  radius?: GlassRadius;
+  tint?: BubbleTint;
+  backgroundHint?: string;
+  opacity?: GlassAnimatedNumber;
+  bordered?: boolean;
+  style?: StyleProp<ViewStyle>;
+};
+
+export function LiquidBubbleSkin({
+  radius = 999,
+  tint = 'iridescent',
+  backgroundHint,
+  opacity = 1,
+  bordered = true,
+  style,
+}: LiquidBubbleSkinProps) {
+  const { tone } = useGlassEnvironment(backgroundHint);
+  const spec = LiquidBubbleTones[tone];
+  const hue = LiquidBubbleGradients[tint];
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[bubbleStyles.disc, { borderRadius: radius, opacity }, style]}>
+      <View
+        style={[bubbleStyles.layer, LiquidBubblePillGradients.core, { opacity: spec.core, borderRadius: radius }]}
+      />
+      <View style={[bubbleStyles.layer, hue, { opacity: spec.iridescence, borderRadius: radius }]} />
+      <View
+        style={[bubbleStyles.layer, LiquidBubblePillGradients.shell, { opacity: spec.shell, borderRadius: radius }]}
+      />
+      <View
+        style={[
+          bubbleStyles.layer,
+          LiquidBubblePillGradients.refraction,
+          { opacity: spec.refraction, borderRadius: radius },
+        ]}
+      />
+      <View
+        style={[
+          bubbleStyles.layer,
+          LiquidBubblePillGradients.specular,
+          { opacity: spec.specular, borderRadius: radius },
+        ]}
+      />
+      {bordered && <View style={[bubbleStyles.rim, { borderColor: spec.border, borderRadius: radius }]} />}
+    </Animated.View>
+  );
+}
+
+type DriftingBubbleProps = {
+  seed: LiquidBubbleSeed;
+  container: { width: number; height: number };
+  tint: BubbleTint;
+  backgroundHint?: string;
+  animated: boolean;
+};
+
+function DriftingBubble({ seed, container, tint, backgroundHint, animated }: DriftingBubbleProps) {
+  const phase = useAnimatedValue(0);
+  const swell = useAnimatedValue(0);
+  const rise = useAnimatedValue(0);
+
+  const size = seed.size * container.width;
+
+  useEffect(() => {
+    const entrance = Animated.timing(rise, {
+      toValue: 1,
+      duration: LiquidBubbleMotion.rise.duration,
+      delay: seed.delay,
+      easing: LiquidBubbleMotion.rise.easing,
+      useNativeDriver: true,
+    });
+    entrance.start();
+
+    if (!animated) {
+      return () => entrance.stop();
+    }
+
+    const drift = Animated.loop(
+      Animated.sequence([
+        Animated.timing(phase, {
+          toValue: 1,
+          duration: LiquidBubbleMotion.drift.duration,
+          delay: seed.delay,
+          easing: LiquidBubbleMotion.drift.easing,
+          useNativeDriver: true,
+        }),
+        Animated.timing(phase, {
+          toValue: 0,
+          duration: LiquidBubbleMotion.drift.duration,
+          easing: LiquidBubbleMotion.drift.easing,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    const breathe = Animated.loop(
+      Animated.sequence([
+        Animated.timing(swell, {
+          toValue: 1,
+          duration: LiquidBubbleMotion.swell.duration,
+          easing: LiquidBubbleMotion.swell.easing,
+          useNativeDriver: true,
+        }),
+        Animated.timing(swell, {
+          toValue: 0,
+          duration: LiquidBubbleMotion.swell.duration,
+          easing: LiquidBubbleMotion.swell.easing,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+
+    drift.start();
+    breathe.start();
+
+    return () => {
+      entrance.stop();
+      drift.stop();
+      breathe.stop();
+    };
+  }, [animated, phase, rise, seed.delay, swell]);
+
+  if (size <= 0) {
+    return null;
+  }
+
+  const travel = LiquidBubbleMotion.driftRange * seed.drift;
+  const translateY = phase.interpolate({ inputRange: [0, 1], outputRange: [0, -travel] });
+  const translateX = phase.interpolate({ inputRange: [0, 1], outputRange: [0, travel * 0.38] });
+  const scale = swell.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1 + LiquidBubbleMotion.swellRange],
+  });
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      renderToHardwareTextureAndroid
+      shouldRasterizeIOS
+      style={{
+        position: 'absolute',
+        left: seed.x * container.width,
+        top: seed.y * container.height,
+        opacity: Animated.multiply(rise, seed.opacity),
+        transform: [{ translateX }, { translateY }, { scale }],
+      }}>
+      <LiquidBubble
+        size={size}
+        tint={seed.tint ?? tint}
+        backgroundHint={backgroundHint}
+        contactShadow={false}
+        cast={false}
+      />
+    </Animated.View>
+  );
+}
+
+export type LiquidBubbleFieldProps = {
+  seeds?: LiquidBubbleSeed[] | keyof typeof LiquidBubbleFields;
+  tint?: BubbleTint;
+  backgroundHint?: string;
+  radius?: GlassRadius;
+  animated?: boolean;
+  style?: StyleProp<ViewStyle>;
+};
+
+export function LiquidBubbleField({
+  seeds = 'sidebar',
+  tint = 'iridescent',
+  backgroundHint,
+  radius,
+  animated = true,
+  style,
+}: LiquidBubbleFieldProps) {
+  const [container, setContainer] = useState({ width: 0, height: 0 });
+
+  const resolved = useMemo(
+    () => (typeof seeds === 'string' ? LiquidBubbleFields[seeds] : seeds),
+    [seeds],
+  );
+
+  const handleLayout = useCallback((event: LayoutChangeEvent) => {
+    const { width, height } = event.nativeEvent.layout;
+    setContainer((current) =>
+      current.width === width && current.height === height ? current : { width, height },
+    );
+  }, []);
+
+  return (
+    <View
+      pointerEvents="none"
+      onLayout={handleLayout}
+      style={[bubbleStyles.field, radius !== undefined && { borderRadius: radius }, style]}>
+      {container.width > 0 &&
+        resolved.map((seed) => (
+          <DriftingBubble
+            key={seed.key}
+            seed={seed}
+            container={container}
+            tint={tint}
+            backgroundHint={backgroundHint}
+            animated={animated}
+          />
+        ))}
+    </View>
+  );
+}
+
+export function useBubbleFringe(tint: BubbleTint = 'iridescent') {
+  return LiquidBubbleTints[tint];
 }
 
 type GlassLensViewProps = {
@@ -659,6 +988,10 @@ type GlassPanelProps = {
   blurEnabled?: boolean;
   sheen?: boolean;
   wash?: boolean;
+  bubbles?: boolean | LiquidBubbleFieldProps['seeds'];
+  bubbleTint?: BubbleTint;
+  bubbleRadius?: GlassRadius;
+  bubblesAnimated?: boolean;
   onLayout?: (event: LayoutChangeEvent) => void;
 };
 
@@ -675,6 +1008,10 @@ export function GlassPanel({
   blurEnabled = true,
   sheen = false,
   wash = true,
+  bubbles,
+  bubbleTint = 'iridescent',
+  bubbleRadius,
+  bubblesAnimated = true,
   onLayout,
 }: GlassPanelProps) {
   const { toneProgress } = useGlassEnvironment(backgroundHint);
@@ -735,6 +1072,15 @@ export function GlassPanel({
         wash={wash}
         style={[{ opacity: presence }, materialStyle]}
       />
+      {bubbles ? (
+        <LiquidBubbleField
+          seeds={bubbles === true ? undefined : bubbles}
+          tint={bubbleTint}
+          backgroundHint={backgroundHint}
+          radius={bubbleRadius ?? cornerRadius}
+          animated={bubblesAnimated}
+        />
+      ) : null}
       {reflection && (
         <Animated.View
           pointerEvents="none"
@@ -796,7 +1142,7 @@ export function GlassPressable({
   const interaction = useGlassInteraction({ disabled });
   const material = GlassMaterials[variant];
   const cornerRadius = radius ?? material.radius;
-  const activeValue = useRef(new Animated.Value(active ? 1 : 0)).current;
+  const activeValue = useAnimatedValue(active ? 1 : 0);
   const previousActive = useRef(active);
 
   useEffect(() => {
