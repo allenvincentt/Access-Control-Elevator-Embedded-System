@@ -14,7 +14,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ScannerFlow } from "@/app/auth/scanner-screens/ScannerFlow";
 import { HintRow } from "@/components/HintRow";
 import { useSnackbar } from "@/components/common/Snackbar";
-import { Checkbox } from "@/components/ui/Checkbox";
 import { Input } from "@/components/ui/Input";
 import { Logo } from "@/components/ui/Logo";
 import { GeneralButton } from "@/components/ui/buttons/GeneralButton";
@@ -40,7 +39,6 @@ export function SignInScreen() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [remember, setRemember] = useState(true);
   const [submitted, setSubmitted] = useState(false);
   const [attempts, setAttempts] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -69,10 +67,8 @@ export function SignInScreen() {
     setBusy(true);
     try {
       await signIn(trimmedEmail, password);
+      setEmail("");
       setPassword("");
-      if (!remember) {
-        setEmail("");
-      }
     } catch (error) {
       const message = errorMessage(error, "Sign in failed. Try again.");
       setFormError(message);
@@ -159,12 +155,7 @@ export function SignInScreen() {
                 onSubmitEditing={handleSubmit}
               />
 
-              <View style={styles.rowBetween}>
-                <Checkbox
-                  checked={remember}
-                  onChange={setRemember}
-                  label="Remember me"
-                />
+              <View style={styles.rowEnd}>
                 <Pressable
                   accessibilityRole="button"
                   hitSlop={8}
@@ -281,10 +272,10 @@ const styles = StyleSheet.create({
   form: {
     gap: spacing.base,
   },
-  rowBetween: {
+  rowEnd: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    justifyContent: "flex-end",
   },
   link: {
     color: colors.primary,

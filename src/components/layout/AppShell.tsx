@@ -9,6 +9,7 @@ import { GeneralButton } from '@/components/ui/buttons/GeneralButton';
 import type { AdminSection } from '@/constants/adminNav';
 import { layout, palette, spacing } from '@/constants/themeColor';
 import { useAuth } from '@/hooks/useAuth';
+import { BlurTargetSurface } from '@/hooks/useBlurTarget';
 import { useStaff } from '@/hooks/useStaff';
 import { errorMessage } from '@/lib/errors';
 import { updateStaff as updateStaffRequest } from '@/services/staffService';
@@ -248,14 +249,16 @@ export function AppShell() {
         onSignOut={() => void signOut()}
       />
 
-      <View style={styles.content}>
-        {tab === 'home' ? <HomeScreen onViewLogs={() => setTab('logs')} /> : null}
-        {tab === 'logs' ? <LogsScreen /> : null}
-        {tab === 'staff' ? (
-          <StaffScreen onCreate={openCreate} onEdit={openEdit} onReenrol={openReenrol} />
-        ) : null}
-        {tab === 'me' ? <MeScreen /> : null}
-      </View>
+      <BlurTargetSurface>
+        <View style={styles.content}>
+          {tab === 'home' ? <HomeScreen onViewLogs={() => setTab('logs')} /> : null}
+          {tab === 'logs' ? <LogsScreen /> : null}
+          {tab === 'staff' ? (
+            <StaffScreen onCreate={openCreate} onEdit={openEdit} onReenrol={openReenrol} />
+          ) : null}
+          {tab === 'me' ? <MeScreen /> : null}
+        </View>
+      </BlurTargetSurface>
 
       <StaffCreateEditModal
         visible={staffModal != null}

@@ -20,7 +20,7 @@ import {
 } from '@/services/authService';
 import type { ProfileRow } from '@/types/database';
 
-export type AuthStatus = 'loading' | 'signedOut' | 'signedIn';
+export type AuthStatus = 'signedOut' | 'signedIn';
 
 type AuthContextValue = {
   status: AuthStatus;
@@ -37,7 +37,7 @@ type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [status, setStatus] = useState<AuthStatus>('loading');
+  const [status, setStatus] = useState<AuthStatus>('signedOut');
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<ProfileRow | null>(null);
   const mounted = useRef(true);
@@ -86,10 +86,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
 
-    supabase.auth.getSession().then(({ data }) => {
-      if (!cancelled) void resolveProfile(data.session ?? null);
-    });
-
     const { data: subscription } = supabase.auth.onAuthStateChange((event, next) => {
       if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
         setSession(next ?? null);
@@ -107,7 +103,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [resolveProfile]);
 
   const signIn = useCallback(async (email: string, password: string) => {
-    setStatus('loading');
     try {
       const next = await signInWithPassword(email, password);
       await resolveProfile(next);

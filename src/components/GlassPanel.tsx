@@ -43,6 +43,7 @@ import {
   type LiquidBubbleSeed,
 } from '@/constants/glassTheme';
 import { colors } from '@/constants/themeColor';
+import { useBlurTarget } from '@/hooks/useBlurTarget';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -835,6 +836,7 @@ type GlassMaterialProps = {
   radius?: GlassRadius;
   interaction?: GlassInteraction | null;
   blurEnabled?: boolean;
+  liveBlur?: boolean;
   sheen?: boolean;
   bordered?: boolean;
   wash?: boolean;
@@ -847,6 +849,7 @@ export function GlassMaterial({
   radius,
   interaction,
   blurEnabled = true,
+  liveBlur = false,
   sheen = false,
   bordered = true,
   wash = true,
@@ -855,10 +858,13 @@ export function GlassMaterial({
   const { tone, toneProgress } = useGlassEnvironment(backgroundHint);
   const toneValue = useToneValue(toneProgress);
   const material = GlassMaterials[variant];
+  const blurTarget = useBlurTarget();
   const [width, setWidth] = useState(0);
 
   const cornerRadius = radius ?? material.radius;
   const sweeps = sheen && Boolean(interaction);
+  const liveTarget =
+    Platform.OS === 'android' && liveBlur && blurTarget?.current ? blurTarget : undefined;
   const blurIntensity = Math.round(
     material.light.blur + (material.dark.blur - material.light.blur) * toneProgress,
   );
@@ -917,7 +923,8 @@ export function GlassMaterial({
           style={StyleSheet.absoluteFill}
           tint={tone === 'dark' ? 'dark' : 'light'}
           intensity={blurIntensity}
-          blurMethod={Platform.OS === 'android' ? 'dimezisBlurViewSdk31Plus' : undefined}
+          blurMethod={liveTarget ? 'dimezisBlurViewSdk31Plus' : undefined}
+          blurTarget={liveTarget}
         />
       )}
       <Animated.View style={[glassStyles.layer, { backgroundColor: tint }]} />
@@ -986,6 +993,7 @@ type GlassPanelProps = {
   interaction?: GlassInteraction | null;
   presence?: GlassAnimatedNumber;
   blurEnabled?: boolean;
+  liveBlur?: boolean;
   sheen?: boolean;
   wash?: boolean;
   bubbles?: boolean | LiquidBubbleFieldProps['seeds'];
@@ -1006,6 +1014,7 @@ export function GlassPanel({
   interaction,
   presence = 1,
   blurEnabled = true,
+  liveBlur = false,
   sheen = false,
   wash = true,
   bubbles,
@@ -1068,6 +1077,7 @@ export function GlassPanel({
         radius={cornerRadius}
         interaction={interaction}
         blurEnabled={blurEnabled}
+        liveBlur={liveBlur}
         sheen={sheen}
         wash={wash}
         style={[{ opacity: presence }, materialStyle]}

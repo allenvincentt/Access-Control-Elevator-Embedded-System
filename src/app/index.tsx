@@ -27,14 +27,10 @@ function ConfigurationScreen() {
 }
 
 export default function Index() {
-  const { status, isAuthenticated } = useAuth();
+  const { isAuthenticated } = useAuth();
 
   if (!IS_SUPABASE_CONFIGURED) {
     return <ConfigurationScreen />;
-  }
-
-  if (status === 'loading') {
-    return null;
   }
 
   return isAuthenticated ? <AppShell /> : <SignInScreen />;

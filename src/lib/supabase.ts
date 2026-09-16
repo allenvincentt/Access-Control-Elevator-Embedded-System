@@ -6,10 +6,11 @@ import { SUPABASE_ANON_KEY, SUPABASE_URL } from '@/lib/env';
 import { secureStorageAdapter } from '@/lib/secureStorage';
 import type { Database } from '@/types/database';
 
+const LEGACY_AUTH_STORAGE_KEY = `sb-${new URL(SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+
 export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
-    storage: secureStorageAdapter,
-    persistSession: true,
+    persistSession: false,
     autoRefreshToken: true,
     detectSessionInUrl: false,
     flowType: 'pkce',
@@ -19,6 +20,8 @@ export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, 
     headers: { 'x-client-info': 'elevator-system-mobile-app/1.0.0' },
   },
 });
+
+void secureStorageAdapter.removeItem(LEGACY_AUTH_STORAGE_KEY).catch(() => undefined);
 
 if (Platform.OS !== 'web') {
   AppState.addEventListener('change', (state) => {

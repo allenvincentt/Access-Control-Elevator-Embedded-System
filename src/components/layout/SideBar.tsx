@@ -13,9 +13,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   GlassLensView,
+  GlassMaterial,
   GlassPanel,
   GlassPressable,
-  LiquidBubbleSkin,
   useAnimatedValue,
   useGlassInteraction,
   useGlassLens,
@@ -52,9 +52,11 @@ const NAV_ICON_CENTER_SHIFT = Math.max(
   0,
 );
 
-const TAB_HEIGHT = 54;
-const TAB_ICON_SIZE = 21;
-const TAB_BADGE_RADIUS = 18;
+const TAB_HEIGHT = 44;
+const TAB_ICON_SIZE = 19;
+const TAB_BADGE_RADIUS = TAB_HEIGHT / 2;
+const MOBILE_SHELL_PADDING = 5;
+const MOBILE_SHELL_RADIUS = TAB_HEIGHT / 2 + MOBILE_SHELL_PADDING;
 
 const BRAND_SHADOW = {
   shadowColor: colors.primary,
@@ -189,10 +191,10 @@ export function SideBar({
         backgroundHint={colors.background}
         reflection
         sheen
-        bubbles="rail"
-        bubbleRadius={30}
+        liveBlur
         interaction={railInteraction}
         style={[styles.mobileShell, { bottom: Math.max(safeAreaBottom, 10) + 10 }, BRAND_SHADOW_COMPACT]}>
+        <View pointerEvents="none" style={styles.mobileShellEdge} />
         <View style={styles.mobileRow}>
           {adminNavFlat.map((item) => (
             <MobileNavTab
@@ -232,8 +234,6 @@ export function SideBar({
       backgroundHint={colors.background}
       reflection
       sheen
-      bubbles="sidebar"
-      bubbleRadius={40}
       interaction={shellInteraction}
       reflectionStyle={styles.shellReflection}
       style={[
@@ -251,6 +251,10 @@ export function SideBar({
         },
         BRAND_SHADOW,
       ]}>
+      <Animated.View
+        pointerEvents="none"
+        style={[styles.desktopShellEdge, { borderRadius: shellRadius }]}
+      />
       <View style={styles.brandRow}>
         <Animated.View style={[styles.brandMark, { transform: [{ translateX: iconShift }] }]}>
           <BrandMark size={BRAND_MARK_SIZE} />
@@ -366,7 +370,7 @@ function MobileNavTab({
   const badgeScale = activeProgress.interpolate({ inputRange: [0, 1], outputRange: [0.8, 1] });
   const labelColor = activeProgress.interpolate({
     inputRange: [0, 1],
-    outputRange: [colors.textMuted, colors.onPrimary],
+    outputRange: [colors.textMuted, colors.primary],
   });
 
   return (
@@ -388,12 +392,11 @@ function MobileNavTab({
             { opacity: activeProgress, transform: [{ scale: badgeScale }] },
           ]}>
           <View style={styles.mobileTabBadgeFill} />
-          <LiquidBubbleSkin
+          <GlassMaterial
+            variant="chip"
             radius={TAB_BADGE_RADIUS}
-            tint="brand"
-            opacity={0.55}
-            bordered={false}
-            backgroundHint={colors.primary}
+            backgroundHint={colors.background}
+            blurEnabled={false}
           />
         </Animated.View>
 
@@ -402,7 +405,7 @@ function MobileNavTab({
             <Icon name={item.icon} size={TAB_ICON_SIZE} color={colors.textMuted} />
           </Animated.View>
           <Animated.View style={[styles.mobileTabIconLayer, { opacity: activeProgress }]}>
-            <Icon name={item.icon} size={TAB_ICON_SIZE} color={colors.onPrimary} />
+            <Icon name={item.icon} size={TAB_ICON_SIZE} color={colors.primary} />
           </Animated.View>
         </View>
 
@@ -420,6 +423,11 @@ function MobileNavTab({
 const styles = StyleSheet.create({
   desktopShell: {
     paddingVertical: 18,
+  },
+  desktopShellEdge: {
+    ...StyleSheet.absoluteFill,
+    borderWidth: 1.5,
+    borderColor: colors.borderStrong,
   },
   shellReflection: {
     left: 30,
@@ -494,18 +502,24 @@ const styles = StyleSheet.create({
   },
   mobileShell: {
     position: 'absolute',
-    left: 12,
-    right: 12,
-    maxWidth: 560,
+    left: 26,
+    right: 26,
+    maxWidth: 420,
     alignSelf: 'center',
-    paddingVertical: 7,
-    borderRadius: 30,
+    paddingVertical: MOBILE_SHELL_PADDING,
+    borderRadius: MOBILE_SHELL_RADIUS,
     zIndex: 30,
+  },
+  mobileShellEdge: {
+    ...StyleSheet.absoluteFill,
+    borderRadius: MOBILE_SHELL_RADIUS,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
   },
   mobileRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 6,
+    paddingHorizontal: 4,
   },
   mobileTabPress: {
     flex: 1,
@@ -515,22 +529,22 @@ const styles = StyleSheet.create({
     height: TAB_HEIGHT,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 3,
-    paddingHorizontal: 4,
+    gap: 2,
+    paddingHorizontal: 2,
     borderRadius: TAB_BADGE_RADIUS,
   },
   mobileTabBadge: {
     position: 'absolute',
     top: 0,
     bottom: 0,
-    left: 2,
-    right: 2,
+    left: 3,
+    right: 3,
     borderRadius: TAB_BADGE_RADIUS,
     overflow: 'hidden',
   },
   mobileTabBadgeFill: {
     ...StyleSheet.absoluteFill,
-    backgroundColor: colors.primary,
+    backgroundColor: colors.primaryTint,
   },
   mobileTabIcon: {
     width: TAB_ICON_SIZE + 4,
@@ -546,7 +560,7 @@ const styles = StyleSheet.create({
   mobileTabLabel: {
     fontFamily: fontFamily.semibold,
     fontWeight: '600',
-    fontSize: 10.5,
+    fontSize: 10,
     letterSpacing: 0.1,
     textAlign: 'center',
   },

@@ -92,6 +92,9 @@ async function ensurePermissions(): Promise<void> {
         ]
       : [PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION];
 
+  const held = await Promise.all(wanted.map((name) => PermissionsAndroid.check(name)));
+  if (held.every(Boolean)) return;
+
   const granted = await PermissionsAndroid.requestMultiple(wanted);
   const missing = wanted.filter((name) => granted[name] !== PermissionsAndroid.RESULTS.GRANTED);
   if (missing.length > 0) {
@@ -127,27 +130,42 @@ async function ensurePoweredOn(): Promise<void> {
 async function scanForController(): Promise<Device> {
   const ble = getManager();
   return new Promise<Device>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      ble.stopDeviceScan();
-      reject(
-        new AppError(
-          'ELEVATOR_NOT_FOUND',
-          'The elevator controller was not found nearby. Check that it is powered on.',
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let settled = false;
+
+    const settle = (outcome: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      try {
+        ble.stopDeviceScan();
+      } catch {}
+      outcome();
+    };
+
+    timer = setTimeout(
+      () =>
+        settle(() =>
+          reject(
+            new AppError(
+              'ELEVATOR_NOT_FOUND',
+              'The elevator controller was not found nearby. Check that it is powered on.',
+            ),
+          ),
         ),
-      );
-    }, SCAN_TIMEOUT_MS);
+      SCAN_TIMEOUT_MS,
+    );
 
     ble.startDeviceScan([SERVICE_UUID], null, (error, device) => {
       if (error) {
-        clearTimeout(timer);
-        ble.stopDeviceScan();
-        reject(unreachable(error));
+        settle(() => reject(unreachable(error)));
         return;
       }
       if (device && (device.name === ELEVATOR_DEVICE_NAME || device.localName === ELEVATOR_DEVICE_NAME || !device.name)) {
-        clearTimeout(timer);
-        ble.stopDeviceScan();
-        resolve(device);
+        settle(() => resolve(device));
       }
     });
   });
