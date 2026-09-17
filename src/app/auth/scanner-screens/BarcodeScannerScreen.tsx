@@ -164,11 +164,13 @@ export function BarcodeScannerScreen({
         onExit={onExit}
         exitIcon="back"
         exitLabel="Back to sign in"
+        centerPanel={manualOpen}
         camera={
           <>
             <CameraView
               style={StyleSheet.absoluteFill}
               facing="back"
+              active={!manualOpen}
               barcodeScannerSettings={{
                 barcodeTypes: [
                   "qr",
@@ -239,6 +241,7 @@ export function BarcodeScannerScreen({
                     <Input
                       label="Company ID"
                       icon="badge"
+                      type="password"
                       value={manualCode}
                       onChangeText={(text) => setManualCode(text.toUpperCase())}
                       autoCapitalize="characters"

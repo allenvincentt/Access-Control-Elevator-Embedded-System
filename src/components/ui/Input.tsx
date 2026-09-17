@@ -73,6 +73,8 @@ export const Input = forwardRef<TextInput, InputProps>(function Input(
     onBlur,
     editable = true,
     multiline = false,
+    autoCapitalize,
+    autoCorrect,
     ...rest
   },
   ref,
@@ -157,6 +159,7 @@ export const Input = forwardRef<TextInput, InputProps>(function Input(
             {optional ? '  ·  Optional' : ''}
           </Animated.Text>
           <TextInput
+            {...rest}
             ref={inputRef}
             value={value}
             onChangeText={onChangeText}
@@ -168,14 +171,13 @@ export const Input = forwardRef<TextInput, InputProps>(function Input(
             placeholderTextColor={colors.textMuted}
             secureTextEntry={isPassword && !reveal}
             keyboardType={KEYBOARD_BY_TYPE[type]}
-            autoCapitalize={type === 'email' || type === 'password' ? 'none' : rest.autoCapitalize}
+            autoCapitalize={type === 'email' || type === 'password' ? 'none' : autoCapitalize}
             autoComplete={rest.autoComplete ?? AUTOCOMPLETE_BY_TYPE[type]}
-            autoCorrect={type === 'email' || type === 'password' ? false : rest.autoCorrect}
+            autoCorrect={type === 'email' || type === 'password' ? false : autoCorrect}
             accessibilityLabel={label}
             cursorColor={colors.primary}
             selectionColor={colors.focusRing}
             style={[styles.input, floating ? styles.inputVisible : styles.inputHidden, multiline && styles.inputMultiline]}
-            {...rest}
           />
         </View>
 

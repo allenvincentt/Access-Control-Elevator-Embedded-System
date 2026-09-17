@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   Pressable,
   StyleSheet,
@@ -242,31 +242,39 @@ export function StaffScreen({ onCreate, onEdit, onReenrol }: StaffScreenProps) {
   const [deleteFor, setDeleteFor] = useState<StaffRow | null>(null);
   const [resetFaceFor, setResetFaceFor] = useState<StaffRow | null>(null);
 
-  const menuItems: ActionMenuItem[] = menuFor
+  const menuTargetRef = useRef<StaffRow | null>(null);
+  if (menuFor) menuTargetRef.current = menuFor;
+  const menuTarget = menuFor ?? menuTargetRef.current;
+
+  const menuItems: ActionMenuItem[] = menuTarget
     ? [
         {
           key: "edit",
           label: "Edit staff member",
           icon: "edit",
-          onPress: () => onEdit(menuFor),
+          onPress: () => onEdit(menuTarget),
         },
-        {
-          key: "reenrol",
-          label:
-            menuFor.face_template_count > 0
-              ? "Re-register face"
-              : "Register face",
-          icon: "face",
-          onPress: () => onReenrol(menuFor),
-        },
-        ...(menuFor.face_template_count > 0
+        ...(menuTarget.role !== "Guest"
+          ? [
+              {
+                key: "reenrol",
+                label:
+                  menuTarget.face_template_count > 0
+                    ? "Re-register face"
+                    : "Register face",
+                icon: "face" as const,
+                onPress: () => onReenrol(menuTarget),
+              },
+            ]
+          : []),
+        ...(menuTarget.face_template_count > 0
           ? [
               {
                 key: "clear-face",
                 label: "Clear face enrollment",
                 icon: "cameraOff" as const,
                 tone: "danger" as const,
-                onPress: () => setResetFaceFor(menuFor),
+                onPress: () => setResetFaceFor(menuTarget),
               },
             ]
           : []),
@@ -275,7 +283,7 @@ export function StaffScreen({ onCreate, onEdit, onReenrol }: StaffScreenProps) {
           label: "Delete staff member",
           icon: "delete",
           tone: "danger",
-          onPress: () => setDeleteFor(menuFor),
+          onPress: () => setDeleteFor(menuTarget),
         },
       ]
     : [];
@@ -462,10 +470,10 @@ export function StaffScreen({ onCreate, onEdit, onReenrol }: StaffScreenProps) {
         <ActionMenu
           visible={menuFor != null}
           onClose={() => setMenuFor(null)}
-          title={menuFor?.full_name ?? "Actions"}
+          title={menuTarget?.full_name ?? "Actions"}
           subtitle={
-            menuFor
-              ? `${menuFor.company_id} · ${menuFor.access_status}`
+            menuTarget
+              ? `${menuTarget.company_id} · ${menuTarget.access_status}`
               : undefined
           }
           items={menuItems}
