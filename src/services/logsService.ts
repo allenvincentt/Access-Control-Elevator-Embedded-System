@@ -14,6 +14,12 @@ const LOG_COLUMNS =
 
 export const LOGS_PAGE_SIZE = 30;
 
+export const REDACTED_COMPANY_ID = '(redacted)';
+
+export function isAnonymizedAttempt(attempt: AccessAttempt): boolean {
+  return attempt.companyId === REDACTED_COMPANY_ID;
+}
+
 export type AttemptOutcome = AccessDecision | 'Incomplete';
 
 export type AccessAttempt = {

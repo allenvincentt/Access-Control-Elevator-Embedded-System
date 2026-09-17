@@ -13,7 +13,11 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import {
+  Gesture,
+  GestureDetector,
+  GestureHandlerRootView,
+} from 'react-native-gesture-handler';
 import Animated, {
   Easing,
   runOnJS,
@@ -105,18 +109,20 @@ export function Modal({
   }, [mounted]);
 
   const dragGesture = Gesture.Pan()
-    .enabled(asSheet)
+    .enabled(asSheet && dismissOnBackdropPress)
     .onUpdate((event) => {
-      dragY.value = Math.max(0, event.translationY);
+      dragY.set(Math.max(0, event.translationY));
     })
     .onEnd((event) => {
       if (event.translationY > SHEET_DISMISS_DISTANCE || event.velocityY > SHEET_DISMISS_VELOCITY) {
-        dragY.value = withTiming(height, { duration: 180, easing: Easing.in(Easing.cubic) }, (finished) => {
-          if (finished) runOnJS(handleClose)();
-        });
+        dragY.set(
+          withTiming(height, { duration: 180, easing: Easing.in(Easing.cubic) }, (finished) => {
+            if (finished) runOnJS(handleClose)();
+          }),
+        );
         return;
       }
-      dragY.value = withSpring(0, { damping: 18, stiffness: 220 });
+      dragY.set(withSpring(0, { damping: 18, stiffness: 220 }));
     });
 
   const backdropScrimStyle = useAnimatedStyle(() => ({ opacity: progress.value }));
@@ -176,7 +182,7 @@ export function Modal({
   return (
     <RNModal visible transparent animationType="none" statusBarTranslucent onRequestClose={onClose}>
       <ModalNestingContext.Provider value={true}>
-        <View style={styles.root}>
+        <GestureHandlerRootView style={styles.root}>
           <View style={styles.backdrop} pointerEvents="box-none">
             {/* Kept at a constant opacity — animating this layer's opacity is what
                 stops Chromium from compositing `backdrop-filter` on first paint. */}
@@ -228,7 +234,7 @@ export function Modal({
               {footer ? <View style={styles.footer}>{footer}</View> : null}
             </Animated.View>
           </KeyboardAvoidingView>
-        </View>
+        </GestureHandlerRootView>
       </ModalNestingContext.Provider>
     </RNModal>
   );

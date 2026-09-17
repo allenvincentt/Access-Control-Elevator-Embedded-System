@@ -480,7 +480,7 @@ export function StaffScreen({ onCreate, onEdit, onReenrol }: StaffScreenProps) {
           title="Delete staff member?"
           message={
             deleteFor
-              ? `${deleteFor.full_name} will lose all elevator access immediately and their face template will be erased. Access history is kept. This can’t be undone.`
+              ? `${deleteFor.full_name} will lose all elevator access immediately and their face template will be erased. Their access history stays in the log but is permanently anonymized — it will no longer identify them. This can’t be undone.`
               : ""
           }
           confirmLabel="Delete"

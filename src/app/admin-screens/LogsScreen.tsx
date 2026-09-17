@@ -26,10 +26,11 @@ import {
 } from "@/constants/themeColor";
 import { useAccessLogs, type LogDecisionFilter } from "@/hooks/useAccessLogs";
 import { DENIAL_LABELS, DENIAL_MESSAGES } from "@/lib/errors";
-import type {
-  AccessAttempt,
-  AttemptBadge,
-  AttemptOutcome,
+import {
+  isAnonymizedAttempt,
+  type AccessAttempt,
+  type AttemptBadge,
+  type AttemptOutcome,
 } from "@/services/logsService";
 
 const FILTERS: { key: LogDecisionFilter; label: string }[] = [
@@ -75,6 +76,7 @@ function formatTime(date: Date) {
 }
 
 function personName(attempt: AccessAttempt) {
+  if (isAnonymizedAttempt(attempt)) return "Deleted staff member";
   return attempt.staffName ?? `Badge ${attempt.companyId}`;
 }
 
@@ -93,6 +95,7 @@ function PersonBadge({
   photoUrl?: string;
   compact?: boolean;
 }) {
+  const anonymized = isAnonymizedAttempt(attempt);
   return (
     <View style={styles.person}>
       <Avatar
@@ -106,10 +109,14 @@ function PersonBadge({
           {personName(attempt)}
         </Text>
         <Text style={styles.personBadgeId} numberOfLines={1}>
-          {attempt.companyId}
+          {anonymized ? "—" : attempt.companyId}
         </Text>
         <Text style={styles.personRole} numberOfLines={1}>
-          {badge ? staffRoleLabel(badge.role) : "Unregistered badge"}
+          {anonymized
+            ? "Record anonymized"
+            : badge
+              ? staffRoleLabel(badge.role)
+              : "Unregistered badge"}
         </Text>
       </View>
     </View>

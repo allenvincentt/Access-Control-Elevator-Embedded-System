@@ -204,8 +204,14 @@ export async function updateStaff(id: string, input: StaffEditInput): Promise<St
 }
 
 export async function deleteStaff(id: string, photoPath?: string | null): Promise<void> {
-  const { error } = await supabase.from('staff').delete().eq('id', id);
+  const { data, error } = await supabase.from('staff').delete().eq('id', id).select('id');
   if (error) throw toAppError(error, 'The staff member could not be deleted.');
+  if ((data?.length ?? 0) === 0) {
+    throw new AppError(
+      'DELETE_BLOCKED',
+      'The staff member was not deleted. Your account may not have permission to remove staff.',
+    );
+  }
   if (photoPath) {
     await removeStaffPhoto(photoPath).catch(() => undefined);
   }
