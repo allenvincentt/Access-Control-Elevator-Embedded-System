@@ -12,12 +12,19 @@ static const char *STATUS_CHAR_UUID = "6e6c0002-b5a3-f393-e0a9-e50e24dcca9e";
 static const char *COMMAND_CHAR_UUID = "6e6c0003-b5a3-f393-e0a9-e50e24dcca9e";
 static const char *DEVICE_KEY = "Elevator123";
 
-static const uint8_t BUTTON_COUNT = 5;
+static const uint8_t INSIDE_FLOOR_BUTTON_COUNT = 3;
+static const uint8_t HALL_CALL_COUNT = 4;
+static const uint8_t BUTTON_COUNT = 9;
 static const uint8_t BUTTON_DOOR_INDEX = 3;
 static const uint8_t BUTTON_EMERGENCY_INDEX = 4;
-static const uint8_t PIN_BUTTON[BUTTON_COUNT] = {32, 33, 25, 4, 16};
+static const uint8_t BUTTON_HALL_FIRST_INDEX = 5;
+static const uint8_t PIN_BUTTON[BUTTON_COUNT] = {32, 33, 25, 4, 16, 13, 5, 17, 15};
 
-static const uint8_t PIN_LED_DOOR = 13;
+static const uint8_t HALL_CALL_FLOOR[HALL_CALL_COUNT] = {0, 1, 1, 2};
+static const bool HALL_CALL_IS_UP[HALL_CALL_COUNT] = {true, true, false, false};
+static const char *HALL_CALL_LABEL[HALL_CALL_COUNT] = {
+  "FirstFloor/Up", "SecondFloor/Up", "SecondFloor/Down", "ThirdFloor/Down"};
+
 static const uint8_t PIN_MOTOR_IN1 = 26;
 static const uint8_t PIN_MOTOR_IN2 = 27;
 static const uint8_t PIN_MOTOR_ENA = 14;
@@ -185,7 +192,11 @@ static void publishStatus();
 static void beginDoorMotion(bool opening);
 static void armDoorHold(uint32_t now);
 static void beginMoving();
-static void requestTrip(uint8_t floor, bool autoReturn);
+static void startDispatch();
+static void clearAllCalls();
+static bool anyCallPending();
+static bool callsInDirection(uint8_t floor, int8_t direction);
+static int8_t chooseDirection();
 
 static Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
 static bool displayReady = false;
@@ -209,7 +220,12 @@ static uint8_t currentFloor = 0;
 static uint8_t selectedFloor = 0;
 static uint8_t displayFloor = 0;
 static int8_t travelStep = 0;
+static int8_t travelDirection = 0;
 static bool autoReturnTrip = false;
+
+static bool callInside[3] = {false, false, false};
+static bool callUp[3] = {false, false, false};
+static bool callDown[3] = {false, false, false};
 static bool pendingGrantClear = false;
 
 static bool servosArmed = false;
@@ -299,10 +315,6 @@ static void ledcRelease(uint8_t pin) {
   digitalWrite(pin, LOW);
 }
 
-static void setDoorLed(bool open) {
-  digitalWrite(PIN_LED_DOOR, open ? HIGH : LOW);
-}
-
 static uint32_t patternDurationMs(const ToneStep *pattern, uint8_t steps) {
   uint32_t total = 0;
   for (uint8_t i = 0; i < steps; i++) {
@@ -370,6 +382,8 @@ static void setEmergency(bool active) {
   emergencyActive = active;
   displayDirty = true;
   if (active) {
+    clearAllCalls();
+    travelDirection = 0;
     startTone(EMERGENCY_ALARM, EMERGENCY_ALARM_STEPS, true);
     Serial.println("[emergency] alarm ON, buttons locked out");
     if (travelPhase == TRAVEL_NONE || travelPhase == TRAVEL_AWAIT_DOOR) {
@@ -558,7 +572,6 @@ static void beginDoorMotion(bool opening) {
 
   doorState = opening ? DOOR_OPENING : DOOR_CLOSING;
   doorMotionStartedAt = now - travelled;
-  setDoorLed(true);
   displayDirty = true;
   Serial.println(opening ? "[door] opening" : "[door] closing");
 }
@@ -593,7 +606,6 @@ static void serviceDoor() {
     if (opening) {
       armDoorHold(now);
     }
-    setDoorLed(opening);
     displayDirty = true;
     Serial.println(opening ? "[door] fully open" : "[door] fully closed");
 
@@ -1006,7 +1018,7 @@ static String statusJson() {
     json += "\"";
   }
   json += "],\"buttons_enabled\":";
-  json += (!emergencyActive && state != STATE_TRAVELING && floorButtonsArmed()) ? "true" : "false";
+  json += (!emergencyActive && floorButtonsArmed()) ? "true" : "false";
   json += ",\"denied_floor\":";
   if (deniedFloorIndex < 0 || deniedFloorIndex > 2) {
     json += "null";
@@ -1021,6 +1033,9 @@ static String statusJson() {
   json += String((unsigned)bleClientCount);
   json += ",\"emergency\":";
   json += emergencyActive ? "true" : "false";
+  json += ",\"direction\":\"";
+  json += travelDirection > 0 ? "up" : (travelDirection < 0 ? "down" : "idle");
+  json += "\"";
   json += ",\"ack_id\":\"";
   json += ackId;
   json += "\",\"ack_action\":\"";
@@ -1083,6 +1098,9 @@ static void processGrant(const String &body) {
   pendingGrantClear = false;
   grantActive = true;
   boardingFloor = currentFloor;
+  callInside[currentFloor] = false;
+  callUp[currentFloor] = false;
+  callDown[currentFloor] = false;
   displayDirty = true;
   beginDoorMotion(true);
 
@@ -1108,6 +1126,10 @@ static void processReset() {
   lastInputAt = millis();
   ackOk = true;
   ackError = "none";
+
+  for (uint8_t i = 0; i < 3; i++) {
+    callInside[i] = false;
+  }
 
   if (state == STATE_TRAVELING) {
     clearGrant();
@@ -1156,8 +1178,132 @@ static void processCommand(const String &body) {
   publishStatus();
 }
 
+static bool anyCallAt(uint8_t floor) {
+  return callInside[floor] || callUp[floor] || callDown[floor];
+}
+
+static bool anyCallPending() {
+  for (uint8_t i = 0; i < 3; i++) {
+    if (anyCallAt(i)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool callsAbove(uint8_t floor) {
+  for (uint8_t i = (uint8_t)(floor + 1); i < 3; i++) {
+    if (anyCallAt(i)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool callsBelow(uint8_t floor) {
+  for (int8_t i = (int8_t)floor - 1; i >= 0; i--) {
+    if (anyCallAt((uint8_t)i)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool callsInDirection(uint8_t floor, int8_t direction) {
+  if (direction > 0) {
+    return callsAbove(floor);
+  }
+  if (direction < 0) {
+    return callsBelow(floor);
+  }
+  return false;
+}
+
+static bool shouldStopAt(uint8_t floor, int8_t direction) {
+  if (callInside[floor]) {
+    return true;
+  }
+  if (direction > 0) {
+    return callUp[floor] || (callDown[floor] && !callsAbove(floor));
+  }
+  if (direction < 0) {
+    return callDown[floor] || (callUp[floor] && !callsBelow(floor));
+  }
+  return anyCallAt(floor);
+}
+
+static void clearCallsAt(uint8_t floor, int8_t direction) {
+  callInside[floor] = false;
+  if (direction > 0) {
+    callUp[floor] = false;
+    if (!callsAbove(floor)) {
+      callDown[floor] = false;
+    }
+    return;
+  }
+  if (direction < 0) {
+    callDown[floor] = false;
+    if (!callsBelow(floor)) {
+      callUp[floor] = false;
+    }
+    return;
+  }
+  callUp[floor] = false;
+  callDown[floor] = false;
+}
+
+static void clearAllCalls() {
+  for (uint8_t i = 0; i < 3; i++) {
+    callInside[i] = false;
+    callUp[i] = false;
+    callDown[i] = false;
+  }
+}
+
+static int8_t chooseDirection() {
+  if (callsInDirection(currentFloor, travelDirection)) {
+    return travelDirection;
+  }
+
+  int8_t nearest = -1;
+  uint8_t bestDistance = 0xFF;
+  for (int8_t i = 0; i < 3; i++) {
+    if (!anyCallAt((uint8_t)i)) {
+      continue;
+    }
+    int8_t delta = i - (int8_t)currentFloor;
+    uint8_t distance = (uint8_t)(delta < 0 ? -delta : delta);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      nearest = i;
+    }
+  }
+
+  if (nearest < 0 || (uint8_t)nearest == currentFloor) {
+    return 0;
+  }
+  return (uint8_t)nearest > currentFloor ? 1 : -1;
+}
+
+static uint8_t nextStopInDirection(uint8_t from, int8_t direction) {
+  if (direction > 0) {
+    for (uint8_t i = (uint8_t)(from + 1); i < 3; i++) {
+      if (shouldStopAt(i, direction)) {
+        return i;
+      }
+    }
+  } else if (direction < 0) {
+    for (int8_t i = (int8_t)from - 1; i >= 0; i--) {
+      if (shouldStopAt((uint8_t)i, direction)) {
+        return (uint8_t)i;
+      }
+    }
+  }
+  return from;
+}
+
 static void beginMoving() {
-  travelStep = selectedFloor > currentFloor ? 1 : -1;
+  travelStep = travelDirection;
   displayFloor = currentFloor;
   segmentStartedAt = millis();
   arrowFrame = 0;
@@ -1173,9 +1319,9 @@ static void beginMoving() {
   Serial.println(FLOOR_KEY[selectedFloor]);
 }
 
-static void requestTrip(uint8_t floor, bool autoReturn) {
-  selectedFloor = floor;
-  autoReturnTrip = autoReturn;
+static void beginTrip(int8_t direction) {
+  travelDirection = direction;
+  selectedFloor = nextStopInDirection(currentFloor, direction);
   state = STATE_TRAVELING;
   travelPhase = TRAVEL_AWAIT_DOOR;
   displayFloor = currentFloor;
@@ -1191,9 +1337,55 @@ static void requestTrip(uint8_t floor, bool autoReturn) {
   publishStatus();
 }
 
+static void serveCurrentFloor() {
+  clearCallsAt(currentFloor, travelDirection);
+  lastInputAt = millis();
+  if (!callsInDirection(currentFloor, travelDirection)) {
+    travelDirection = 0;
+  }
+
+  if (doorOpenAuthorized() || emergencyActive) {
+    Serial.print("[queue] serving ");
+    Serial.print(FLOOR_KEY[currentFloor]);
+    Serial.println(" without moving, car is already here");
+    beginDoorMotion(true);
+  } else {
+    Serial.print("[queue] call at ");
+    Serial.print(FLOOR_KEY[currentFloor]);
+    Serial.println(" dropped, door needs a verified authorization");
+  }
+  publishStatus();
+}
+
+static void startDispatch() {
+  if (emergencyActive || state != STATE_IDLE || travelPhase != TRAVEL_NONE) {
+    return;
+  }
+  if (doorState != DOOR_CLOSED || !anyCallPending()) {
+    return;
+  }
+
+  if (shouldStopAt(currentFloor, travelDirection)) {
+    serveCurrentFloor();
+    return;
+  }
+
+  int8_t direction = chooseDirection();
+  if (direction == 0) {
+    clearCallsAt(currentFloor, 0);
+    return;
+  }
+
+  Serial.print("[queue] dispatching ");
+  Serial.print(direction > 0 ? "up" : "down");
+  Serial.print(" from ");
+  Serial.println(FLOOR_KEY[currentFloor]);
+  beginTrip(direction);
+}
+
 static void beginArrivalSequence() {
   motorStop();
-  currentFloor = selectedFloor;
+  selectedFloor = currentFloor;
   displayFloor = currentFloor;
   travelStep = 0;
   travelPhase = TRAVEL_ARRIVAL_PAUSE;
@@ -1207,7 +1399,13 @@ static void beginArrivalSequence() {
 }
 
 static void finishArrival() {
-  if (!autoReturnTrip) {
+  clearCallsAt(currentFloor, travelDirection);
+  if (!callsInDirection(currentFloor, travelDirection)) {
+    travelDirection = 0;
+  }
+
+  if (!autoReturnTrip && selectedFloorIndex >= 0 &&
+      currentFloor == (uint8_t)selectedFloorIndex) {
     sessionResult = "arrived";
   }
 
@@ -1229,18 +1427,15 @@ static void finishArrival() {
     }
   }
 
-  autoReturnTrip = false;
+  if (currentFloor == LOBBY_FLOOR) {
+    autoReturnTrip = false;
+  }
   publishStatus();
 }
 
-static void onFloorButton(uint8_t index) {
-  if (state == STATE_TRAVELING) {
-    Serial.print("[button] ignored, trip in progress: ");
-    Serial.println(FLOOR_KEY[index]);
-    return;
-  }
+static void onInsideFloorButton(uint8_t index) {
   if (grantActive && !floorAuthorized[index]) {
-    Serial.print("[button] ignored, floor not assigned to ");
+    Serial.print("[inside] ignored, floor not assigned to ");
     Serial.print(grantStaff[0] == '\0' ? "this badge" : grantStaff);
     Serial.print(": ");
     Serial.println(FLOOR_KEY[index]);
@@ -1250,20 +1445,62 @@ static void onFloorButton(uint8_t index) {
     return;
   }
   if (!floorButtonsArmed()) {
-    Serial.print("[button] held, door still opening: ");
+    Serial.print("[inside] held, door still opening: ");
     Serial.println(FLOOR_KEY[index]);
     return;
   }
-  if (index == currentFloor) {
-    Serial.print("[button] rejected, already at ");
+  if (index == currentFloor && state != STATE_TRAVELING) {
+    Serial.print("[inside] already at ");
     Serial.println(FLOOR_KEY[index]);
+    if (state == STATE_IDLE && doorState == DOOR_CLOSED) {
+      beginDoorMotion(true);
+    } else if (doorState != DOOR_CLOSED) {
+      armDoorHold(millis());
+    }
     return;
   }
 
+  autoReturnTrip = false;
+  callInside[index] = true;
   selectedFloorIndex = (int8_t)index;
-  Serial.print("[button] accepted: ");
+  Serial.print("[inside] queued: ");
   Serial.println(FLOOR_KEY[index]);
-  requestTrip(index, false);
+
+  if (state == STATE_DOOR_OPEN) {
+    int8_t direction = chooseDirection();
+    if (direction != 0) {
+      beginTrip(direction);
+      return;
+    }
+  }
+  publishStatus();
+}
+
+static void onHallCallButton(uint8_t slot) {
+  uint8_t floor = HALL_CALL_FLOOR[slot];
+  bool up = HALL_CALL_IS_UP[slot];
+
+  autoReturnTrip = false;
+  if (up) {
+    callUp[floor] = true;
+  } else {
+    callDown[floor] = true;
+  }
+  Serial.print("[hall] queued: ");
+  Serial.println(HALL_CALL_LABEL[slot]);
+
+  if (floor == currentFloor && state != STATE_TRAVELING && doorState != DOOR_CLOSED) {
+    if (up) {
+      callUp[floor] = false;
+    } else {
+      callDown[floor] = false;
+    }
+    armDoorHold(millis());
+    Serial.print("[hall] served immediately, door already open at ");
+    Serial.println(FLOOR_KEY[floor]);
+  }
+
+  publishStatus();
 }
 
 static void onDoorButton() {
@@ -1278,17 +1515,30 @@ static void onEmergencyButton() {
   setEmergency(!emergencyActive);
 }
 
+static const char *buttonName(uint8_t index) {
+  if (index < INSIDE_FLOOR_BUTTON_COUNT) {
+    return FLOOR_KEY[index];
+  }
+  if (index == BUTTON_DOOR_INDEX) {
+    return "door";
+  }
+  if (index == BUTTON_EMERGENCY_INDEX) {
+    return "emergency";
+  }
+  return HALL_CALL_LABEL[index - BUTTON_HALL_FIRST_INDEX];
+}
+
 static void onButtonPressed(uint8_t index) {
   lastInputAt = millis();
 
   if (emergencyActive && index != BUTTON_EMERGENCY_INDEX) {
     Serial.print("[button] locked out, emergency active: ");
-    Serial.println(index == BUTTON_DOOR_INDEX ? "door" : FLOOR_KEY[index]);
+    Serial.println(buttonName(index));
     return;
   }
 
-  if (index < 3) {
-    onFloorButton(index);
+  if (index < INSIDE_FLOOR_BUTTON_COUNT) {
+    onInsideFloorButton(index);
     return;
   }
   if (index == BUTTON_DOOR_INDEX) {
@@ -1297,7 +1547,9 @@ static void onButtonPressed(uint8_t index) {
   }
   if (index == BUTTON_EMERGENCY_INDEX) {
     onEmergencyButton();
+    return;
   }
+  onHallCallButton((uint8_t)(index - BUTTON_HALL_FIRST_INDEX));
 }
 
 static void pollButtons() {
@@ -1361,13 +1613,16 @@ static void serviceTravel(uint32_t now) {
   arrowFrameAt = now;
   displayDirty = true;
 
-  if (displayFloor == selectedFloor) {
+  if (shouldStopAt(currentFloor, travelDirection) ||
+      !callsInDirection(currentFloor, travelDirection)) {
     travelPhase = TRAVEL_SETTLING;
     settleStartedAt = now;
+    selectedFloor = currentFloor;
     Serial.print("[travel] reached ");
     Serial.print(FLOOR_KEY[displayFloor]);
     Serial.println(", leveling before motor stop");
   } else {
+    selectedFloor = nextStopInDirection(currentFloor, travelDirection);
     Serial.print("[travel] passing ");
     Serial.println(FLOOR_KEY[displayFloor]);
   }
@@ -1379,7 +1634,7 @@ static void serviceInactivity(uint32_t now) {
   if (state != STATE_IDLE || doorState != DOOR_CLOSED) {
     return;
   }
-  if (currentFloor == LOBBY_FLOOR) {
+  if (anyCallPending() || currentFloor == LOBBY_FLOOR) {
     return;
   }
   if (now - lastInputAt < INACTIVITY_RETURN_MS) {
@@ -1387,10 +1642,12 @@ static void serviceInactivity(uint32_t now) {
   }
 
   lastInputAt = now;
+  autoReturnTrip = true;
+  callInside[LOBBY_FLOOR] = true;
   Serial.print("[inactivity] ");
   Serial.print(INACTIVITY_RETURN_MS / 1000);
   Serial.println("s without input, returning to FirstFloor");
-  requestTrip(LOBBY_FLOOR, true);
+  startDispatch();
 }
 
 static void serviceStateMachine() {
@@ -1411,6 +1668,7 @@ static void serviceStateMachine() {
     return;
   }
 
+  startDispatch();
   serviceInactivity(now);
 }
 
@@ -1470,9 +1728,6 @@ void setup() {
     buttonLastReadHigh[i] = buttonStableHigh[i];
     buttonChangedAt[i] = millis();
   }
-
-  pinMode(PIN_LED_DOOR, OUTPUT);
-  setDoorLed(false);
 
   pinMode(PIN_MOTOR_IN1, OUTPUT);
   pinMode(PIN_MOTOR_IN2, OUTPUT);
