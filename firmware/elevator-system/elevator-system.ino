@@ -40,7 +40,7 @@ static const uint8_t OLED_WIDTH = 128;
 static const uint8_t OLED_HEIGHT = 64;
 static const uint8_t OLED_ADDRESS_PRIMARY = 0x3C;
 static const uint8_t OLED_ADDRESS_ALTERNATE = 0x3D;
-static const uint32_t OLED_I2C_HZ = 100000;
+static const uint32_t OLED_I2C_HZ = 400000;
 
 static const char *FLOOR_KEY[3] = {"FirstFloor", "SecondFloor", "ThirdFloor"};
 static const char FLOOR_DIGIT[3] = {'1', '2', '3'};
@@ -87,7 +87,7 @@ static const uint16_t SERVO_US_MAX_SAFE = 2400;
 static const uint8_t DOOR_LEFT_CLOSED_DEG = 90;
 static const uint8_t DOOR_RIGHT_CLOSED_DEG = 90;
 
-static const uint8_t DOOR_TRAVEL_DEG = 60;
+static const uint8_t DOOR_TRAVEL_DEG = 90;
 static const bool DOOR_LEFT_OPENS_CW = false;
 
 static const bool SERVO_TRIM_MODE = false;
@@ -936,6 +936,10 @@ static bool shouldShowCreature() {
 
 static void serviceDisplay() {
   if (!displayReady) {
+    return;
+  }
+
+  if (doorState == DOOR_OPENING || doorState == DOOR_CLOSING) {
     return;
   }
 

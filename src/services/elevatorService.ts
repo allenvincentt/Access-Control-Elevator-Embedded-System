@@ -19,6 +19,8 @@ const ACK_INTERVAL_MS = 70;
 const STAFF_NAME_MAX = 24;
 const HEARTBEAT_SAMPLE_MS = 400;
 const BOARDING_WATCH_MS = 700;
+/** Consecutive unreadable polls before the boarding watch calls the link down. */
+const BOARDING_FAULT_TOLERANCE = 3;
 
 export type ElevatorState = 'idle' | 'door_open' | 'traveling';
 export type ElevatorSessionResult = 'none' | 'arrived' | 'timeout' | 'cancelled';
@@ -104,13 +106,97 @@ function encodePayload(value: unknown): string {
   return bufferToBase64(bytes.buffer as ArrayBuffer);
 }
 
-function decodePayload(value: string): Record<string, unknown> {
-  const text = new TextDecoder().decode(base64ToBuffer(value));
-  const parsed: unknown = JSON.parse(text);
-  if (typeof parsed !== 'object' || parsed === null) {
-    throw new AppError('ELEVATOR_BAD_RESPONSE', 'The elevator controller sent an unreadable reply.');
+/**
+ * Returns the outermost balanced `{...}`, so the head of one payload can be
+ * recovered when a second one has been spliced onto it. Quoting is tracked, so a
+ * brace inside a string does not end the object early.
+ */
+function balancedObject(text: string): string | null {
+  const start = text.indexOf('{');
+  if (start < 0) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start; index < text.length; index += 1) {
+    const character = text[index];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (inString) {
+      if (character === '\\') escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') inString = true;
+    else if (character === '{') depth += 1;
+    else if (character === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, index + 1);
+    }
   }
-  return parsed as Record<string, unknown>;
+
+  return null;
+}
+
+/**
+ * A read can hand back something that is not valid JSON even while the link is
+ * perfectly healthy, so this never assumes the bytes parse.
+ *
+ * The controller publishes a status of up to STATUS_MAX_BYTES (500 in the
+ * sketch) but negotiates a 247-byte MTU, which leaves 244 bytes per ATT
+ * transaction. Anything longer is fetched as a long read in several round trips,
+ * and the sketch rewrites the characteristic from its main loop between them, so
+ * the phone assembles the head of one payload onto the tail of another. The
+ * splice usually lands inside a string, which is what surfaces as "JSON Parse
+ * error: U+0000 thru U+001F is not allowed in string".
+ *
+ * Trailing NUL padding is dropped and the first balanced object is recovered
+ * where one survives. What cannot be read raises ELEVATOR_BAD_PAYLOAD, which
+ * pollers treat as a read to retry rather than as a command that failed.
+ *
+ * Exported so the recovery can be exercised directly; nothing else should call it.
+ */
+export function decodePayload(value: string): Record<string, unknown> {
+  let text: string;
+  try {
+    text = new TextDecoder().decode(base64ToBuffer(value));
+  } catch {
+    throw new AppError(
+      'ELEVATOR_BAD_PAYLOAD',
+      'The elevator controller sent a reply this phone could not decode.',
+    );
+  }
+
+  const terminator = text.indexOf('\u0000');
+  if (terminator >= 0) text = text.slice(0, terminator);
+  text = text.trim();
+
+  const shapes = [text];
+  const balanced = balancedObject(text);
+  if (balanced !== null && balanced !== text) shapes.push(balanced);
+
+  for (const shape of shapes) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(shape);
+    } catch {
+      continue;
+    }
+    // An array parses as an object but is never a status or boarding payload,
+    // and accepting one would hand every reader a bag of undefined fields.
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  }
+
+  throw new AppError(
+    'ELEVATOR_BAD_PAYLOAD',
+    'The elevator controller sent a truncated reply. This is usually its status payload outgrowing one Bluetooth packet.',
+  );
 }
 
 function bleDetail(error: unknown): string | null {
@@ -443,8 +529,25 @@ async function sendCommand(command: Record<string, unknown>): Promise<Record<str
   const cmdId = nextCommandId();
   await writeCommand(command, cmdId);
 
+  let readFault: unknown = null;
+  let answered = 0;
+
   for (let attempt = 0; attempt < ACK_ATTEMPTS; attempt++) {
-    const status = await readStatusPayload();
+    let status: Record<string, unknown>;
+    try {
+      status = await readStatusPayload();
+      answered += 1;
+    } catch (error) {
+      // The write has already landed by this point, so a status read that comes
+      // back unreadable is a poll that failed, not a command that failed. The
+      // controller rewrites the status characteristic from its main loop and a
+      // long read can catch it mid-update, which used to abort the command and
+      // report a Bluetooth failure for a door that had in fact just opened.
+      readFault = error;
+      await delay(ACK_INTERVAL_MS);
+      continue;
+    }
+
     const ack = findAck(status, cmdId);
     if (ack) {
       if (!ack.ok) throw ackFailure(ack.error);
@@ -452,6 +555,10 @@ async function sendCommand(command: Record<string, unknown>): Promise<Record<str
     }
     await delay(ACK_INTERVAL_MS);
   }
+
+  // Nothing readable came back at all, so report the link itself rather than
+  // going on to diagnose an acknowledgement that was never observable.
+  if (answered === 0 && readFault !== null) throw unreachable(readFault);
 
   throw await unacknowledged(cmdId);
 }
@@ -591,15 +698,23 @@ export function watchBoarding(
 ): () => void {
   let cancelled = false;
   let inFlight = false;
+  let consecutiveFaults = 0;
 
   const tick = async () => {
     if (cancelled || inFlight) return;
     inFlight = true;
     try {
       const status = await readBoardingStatus();
+      consecutiveFaults = 0;
       if (!cancelled) listener(status);
     } catch (error) {
-      if (!cancelled) onError?.(unreachable(error));
+      // One unreadable poll is normal: the controller rewrites its status
+      // characteristic constantly, so a read can land mid-update. Only a run of
+      // them means the link is actually down, and a later good read clears it.
+      consecutiveFaults += 1;
+      if (!cancelled && consecutiveFaults >= BOARDING_FAULT_TOLERANCE) {
+        onError?.(unreachable(error));
+      }
     } finally {
       inFlight = false;
     }

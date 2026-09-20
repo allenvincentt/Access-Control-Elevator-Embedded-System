@@ -1,4 +1,5 @@
 import { CameraView } from "expo-camera";
+import * as ScreenOrientation from "expo-screen-orientation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AppState,
@@ -29,11 +30,14 @@ import { reportOccupancy } from "@/services/elevatorService";
 import {
   PERSON_DETECTION,
   PERSON_MODEL_FAILURE_MESSAGES,
-  PERSON_ROI,
+  PERSON_ROI_WIDE,
+  PERSON_SCOPE_FULL,
+  PERSON_SCOPES,
 } from "@/services/person/constants";
 import {
   detectPeople,
   discardFile,
+  type DetectionStats,
   type PersonBox,
 } from "@/services/person/detector";
 import {
@@ -53,9 +57,9 @@ type Frame = {
   height: number;
 };
 
-const IDLE_POLL_MS = 150;
 const DANGER = "#FF6B60";
 const SUCCESS = "#4ADE80";
+const PANEL_MAX_WIDTH = 380;
 
 export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
   const snackbar = useSnackbar();
@@ -78,8 +82,10 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
 
   const [cameraReady, setCameraReady] = useState(false);
   const [appActive, setAppActive] = useState(true);
+  const [landscape, setLandscape] = useState(false);
   const [model, setModel] = useState<PersonModelState | null>(null);
   const [boxes, setBoxes] = useState<PersonBox[]>([]);
+  const [stats, setStats] = useState<DetectionStats | null>(null);
   const [tracked, setTracked] = useState<TrackedCount | null>(null);
   const [source, setSource] = useState<{
     width: number;
@@ -102,6 +108,24 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
     });
     return () => {
       mounted.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let released = false;
+
+    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE)
+      .catch(() => undefined)
+      .then(() => {
+        if (!released && mounted.current) setLandscape(true);
+      });
+
+    return () => {
+      released = true;
+      setLandscape(false);
+      void ScreenOrientation.lockAsync(
+        ScreenOrientation.OrientationLock.PORTRAIT_UP,
+      ).catch(() => undefined);
     };
   }, []);
 
@@ -133,7 +157,8 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
     }
   }, []);
 
-  const monitoring = cameraReady && appActive && model?.ready === true;
+  const monitoring =
+    cameraReady && appActive && landscape && model?.ready === true;
 
   useEffect(() => {
     if (!monitoring) return;
@@ -148,23 +173,25 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
 
     const loop = async () => {
       while (!cancelled) {
-        if (phaseRef.current !== "counting") {
-          if (trackingRef.current) {
-            trackingRef.current = false;
-            tracker.current.reset();
-            setTracked(null);
-            setBoxes([]);
-          }
+        const counting = phaseRef.current === "counting";
+        const interval = counting
+          ? PERSON_DETECTION.pollIntervalMs
+          : PERSON_DETECTION.idlePollIntervalMs;
+
+        if (counting !== trackingRef.current) {
+          trackingRef.current = counting;
           reportedKey.current = null;
-          await wait(IDLE_POLL_MS);
-          continue;
+          // Tracks built up while idling describe the car as it was before this
+          // count began. Carrying them across means a count opens with whatever
+          // the detector had already settled on, including anything it held onto
+          // in an empty car, and those tracks are confirmed so they count at once.
+          tracker.current.reset();
         }
-        trackingRef.current = true;
 
         const frame = await capture();
         if (cancelled) break;
         if (!frame) {
-          await wait(PERSON_DETECTION.pollIntervalMs);
+          await wait(interval);
           continue;
         }
 
@@ -172,7 +199,7 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
 
         let outcome;
         try {
-          outcome = await detectPeople(frame, PERSON_ROI);
+          outcome = await detectPeople(frame, PERSON_ROI_WIDE, PERSON_SCOPES);
         } catch (error) {
           discardFile(frame.uri);
           if (!cancelled && mounted.current) {
@@ -189,14 +216,20 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
             setFault("The camera could not produce a usable frame.");
             break;
           }
-          await wait(PERSON_DETECTION.pollIntervalMs);
+          await wait(interval);
           continue;
         }
 
         detectorMisses.current = 0;
         const next = tracker.current.push(outcome.boxes);
         setBoxes(outcome.boxes);
+        setStats(outcome.stats);
         setTracked(next);
+
+        if (!counting) {
+          await wait(interval);
+          continue;
+        }
 
         const key = `${attemptRef.current}-${faultSeqRef.current}-${next.count}`;
         const stale =
@@ -219,7 +252,7 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
           }
         }
 
-        await wait(PERSON_DETECTION.pollIntervalMs);
+        await wait(interval);
       }
     };
 
@@ -237,6 +270,7 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
   const matches = counting && observed === expected;
 
   const overlay = buildOverlay(boxes, source, viewWidth, viewHeight);
+  const wide = viewWidth > viewHeight;
 
   if (model && !model.ready) {
     const copy = PERSON_MODEL_FAILURE_MESSAGES[model.failure];
@@ -281,6 +315,7 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
         onExit={onExit}
         exitIcon="back"
         exitLabel="Back to sign in"
+        panelStyle={wide ? styles.panelWide : undefined}
         camera={
           <>
             <CameraView
@@ -293,10 +328,10 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
             />
             <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
               <Rect
-                x={PERSON_ROI.left * viewWidth}
-                y={PERSON_ROI.top * viewHeight}
-                width={(PERSON_ROI.right - PERSON_ROI.left) * viewWidth}
-                height={(PERSON_ROI.bottom - PERSON_ROI.top) * viewHeight}
+                x={PERSON_ROI_WIDE.left * viewWidth}
+                y={PERSON_ROI_WIDE.top * viewHeight}
+                width={(PERSON_ROI_WIDE.right - PERSON_ROI_WIDE.left) * viewWidth}
+                height={(PERSON_ROI_WIDE.bottom - PERSON_ROI_WIDE.top) * viewHeight}
                 fill="none"
                 stroke="rgba(255,255,255,0.45)"
                 strokeWidth={2}
@@ -317,6 +352,16 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
                 />
               ))}
             </Svg>
+            {PERSON_DETECTION.showDiagnostics && stats ? (
+              <View style={styles.diagnostics} pointerEvents="none">
+                <Text style={styles.diagnosticsText}>
+                  {`model ${stats.reported}/${stats.scanned}  gate ${stats.decoded}  merged ${stats.merged}  in view ${stats.accepted}  counted ${observed}`}
+                </Text>
+                <Text style={styles.diagnosticsText}>
+                  {`best person score ${stats.topScore.toFixed(2)} · needs ${PERSON_SCOPE_FULL.minScore.toFixed(2)}`}
+                </Text>
+              </View>
+            ) : null}
           </>
         }
         panel={
@@ -470,6 +515,11 @@ function buildOverlay(
 }
 
 const styles = StyleSheet.create({
+  panelWide: {
+    alignSelf: "flex-end",
+    width: "100%",
+    maxWidth: PANEL_MAX_WIDTH,
+  },
   head: {
     flexDirection: "row",
     alignItems: "center",
@@ -505,6 +555,21 @@ const styles = StyleSheet.create({
   tallyValue: {
     color: palette.ink,
     ...typography.display,
+  },
+  diagnostics: {
+    position: "absolute",
+    left: spacing.base,
+    bottom: spacing.base,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    gap: 2,
+  },
+  diagnosticsText: {
+    color: "rgba(255,255,255,0.85)",
+    fontSize: 11,
+    fontVariant: ["tabular-nums"],
   },
 });
 
