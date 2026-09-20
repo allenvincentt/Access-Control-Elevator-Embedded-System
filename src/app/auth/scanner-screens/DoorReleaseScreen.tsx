@@ -2,320 +2,182 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import type { VerificationSession } from '@/app/auth/scanner-screens/ScannerFlow';
-import { useSnackbar } from '@/components/common/Snackbar';
 import { HintRow } from '@/components/HintRow';
 import { ScannerScaffold } from '@/components/scanner/ScannerScaffold';
 import { GeneralButton } from '@/components/ui/buttons/GeneralButton';
 import { Icon, type IconName } from '@/components/ui/Icon';
-import { floorLabel, floorShortLabel } from '@/constants/floors';
+import { floorShortLabel } from '@/constants/floors';
 import { colors, spacing, typography } from '@/constants/themeColor';
-import { getDeviceId } from '@/lib/deviceId';
-import { DENIAL_MESSAGES, errorMessage } from '@/lib/errors';
-import { announceAccessDenied } from '@/lib/speech';
-import {
-  cancelElevatorSession,
-  openDoorForStaff,
-  readElevatorStatus,
-} from '@/services/elevatorService';
-import { commitFloorAccess } from '@/services/verificationService';
+import { errorMessage } from '@/lib/errors';
+import { announceBoardingHold } from '@/lib/speech';
+import { getRideState, joinRide } from '@/services/rideSession';
+import { cancelVerificationSession } from '@/services/verificationService';
 import type { FloorKey } from '@/types/database';
 
 export type DoorReleaseScreenProps = {
   session: VerificationSession;
   floors: FloorKey[];
-  onFinished: () => void;
+  onReleased: () => void;
   onCancel: () => void;
 };
 
-type Phase = 'opening' | 'waiting' | 'moving' | 'arrived' | 'timeout' | 'error';
+type Phase = 'releasing' | 'released' | 'error';
 
-const POLL_INTERVAL_MS = 700;
-const DONE_HOLD_MS = 2600;
-
-/**
- * The controller's radio shares a supply rail with the lift motor, and the
- * motor kicks at full duty the instant a floor is chosen. That is enough to
- * drop a status read that happens to be in flight even though the trip itself
- * is running perfectly, so ride out a short run of failures rather than tearing
- * down a session the car is still executing.
- */
-const POLL_FAILURE_GRACE = 6;
-
-/**
- * An idle controller reporting no session result means it was reset or power
- * cycled out from under us. Confirm that across several reads before giving up,
- * so one odd snapshot cannot end a live session.
- */
-const LOST_SESSION_GRACE = 4;
+const RETURN_HOLD_MS = 2000;
 
 export function DoorReleaseScreen({
   session,
   floors,
-  onFinished,
+  onReleased,
   onCancel,
 }: DoorReleaseScreenProps) {
-  const snackbar = useSnackbar();
   const mounted = useRef(true);
-  const hasOpened = useRef(false);
-  const inFlight = useRef(false);
-  const doneTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pollFailures = useRef(0);
-  const lostReads = useRef(0);
-  const lastDeniedSeq = useRef(0);
-  /** Mirrors `chosen` for the polling closure, which must not read stale state. */
-  const chosenRef = useRef<FloorKey | null>(null);
+  const hasReleased = useRef(false);
+  const returnTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [phase, setPhase] = useState<Phase>('opening');
-  const [secondsLeft, setSecondsLeft] = useState(0);
-  const [chosen, setChosen] = useState<FloorKey | null>(null);
+  const [phase, setPhase] = useState<Phase>('releasing');
+  const [riders, setRiders] = useState(0);
   const [detail, setDetail] = useState<string | null>(null);
 
-  const clearTimers = useCallback(() => {
-    if (doneTimer.current) clearTimeout(doneTimer.current);
-    doneTimer.current = null;
+  const clearReturnTimer = useCallback(() => {
+    if (returnTimer.current) clearTimeout(returnTimer.current);
+    returnTimer.current = null;
   }, []);
 
-  const fail = useCallback(
-    (message: string) => {
-      if (!mounted.current) return;
-      clearTimers();
-      setDetail(message);
-      setPhase('error');
-      snackbar.show(message, { variant: 'error' });
-    },
-    [clearTimers, snackbar],
-  );
-
-  /**
-   * The controller reports the chosen floor from the moment the button is
-   * pressed, so hold on to it: the read that finally carries `arrived` is the
-   * one most likely to be disturbed by the motor, and the trip still has to be
-   * logged.
-   */
-  const rememberChosen = useCallback((floor: FloorKey) => {
-    if (chosenRef.current === floor) return;
-    chosenRef.current = floor;
-    setChosen(floor);
-  }, []);
-
-  const recordTrip = useCallback(
-    async (floor: FloorKey) => {
-      try {
-        const deviceId = await getDeviceId();
-        const result = await commitFloorAccess(session.token, floor, deviceId);
-        if (!mounted.current) return;
-        if (!result.ok) {
-          snackbar.show(DENIAL_MESSAGES[result.reason], { variant: 'info' });
-        }
-      } catch (error) {
-        if (!mounted.current) return;
-        snackbar.show(errorMessage(error, 'The trip could not be logged.'), { variant: 'info' });
-      }
-    },
-    [session.token, snackbar],
-  );
-
-  const finishAfterHold = useCallback(() => {
-    doneTimer.current = setTimeout(() => {
-      if (mounted.current) onFinished();
-    }, DONE_HOLD_MS);
-  }, [onFinished]);
-
-  const pollOnce = useCallback(async () => {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    try {
-      const status = await readElevatorStatus();
-      if (!mounted.current) return;
-      pollFailures.current = 0;
-
-      if (status.selectedFloor) rememberChosen(status.selectedFloor);
-      setSecondsLeft(Math.ceil(status.remainingMs / 1000));
-
-      if (status.deniedSeq > lastDeniedSeq.current) {
-        lastDeniedSeq.current = status.deniedSeq;
-        announceAccessDenied();
-        if (status.deniedFloor) {
-          snackbar.show(`${floorLabel(status.deniedFloor)} is not on this badge.`, {
-            variant: 'info',
-          });
-        }
-      }
-
-      if (status.sessionResult === 'arrived') {
-        const floor = status.selectedFloor ?? chosenRef.current;
-        setPhase('arrived');
-        snackbar.show(
-          floor ? `${session.staffName} · ${floorLabel(floor)}` : `${session.staffName} · arrived`,
-          { variant: 'success', duration: 4000 },
-        );
-        if (floor) void recordTrip(floor);
-        finishAfterHold();
-        return;
-      }
-
-      if (status.sessionResult === 'timeout') {
-        setPhase('timeout');
-        snackbar.show('The door closed before a floor was chosen.', { variant: 'info' });
-        finishAfterHold();
-        return;
-      }
-
-      if (status.sessionResult === 'cancelled') {
-        fail('The elevator session was cancelled at the controller.');
-        return;
-      }
-
-      // The car took the floor and is running the trip: the door has shut and
-      // the selection window is spent, so stop offering a countdown that no
-      // longer describes anything.
-      if (status.state === 'traveling') {
-        lostReads.current = 0;
-        setPhase('moving');
-        return;
-      }
-
-      if (status.state === 'door_open') {
-        lostReads.current = 0;
-        setPhase('waiting');
-        return;
-      }
-
-      // Idle with nothing to report: the controller restarted or another
-      // terminal reset it. Nothing further is coming, so stop rather than poll
-      // a session that no longer exists.
-      lostReads.current += 1;
-      if (lostReads.current >= LOST_SESSION_GRACE) {
-        fail('The elevator controller restarted and lost this session. Scan the badge again.');
-      }
-    } catch (error) {
-      if (!mounted.current) return;
-      pollFailures.current += 1;
-      if (pollFailures.current >= POLL_FAILURE_GRACE) {
-        fail(errorMessage(error, 'The elevator controller stopped responding.'));
-      }
-    } finally {
-      inFlight.current = false;
-    }
-  }, [fail, finishAfterHold, recordTrip, rememberChosen, session.staffName, snackbar]);
-
-  const open = useCallback(async () => {
-    setPhase('opening');
+  const release = useCallback(async () => {
+    clearReturnTimer();
+    setPhase('releasing');
     setDetail(null);
-    setChosen(null);
-    chosenRef.current = null;
-    pollFailures.current = 0;
-    lostReads.current = 0;
+
     try {
-      const status = await openDoorForStaff(session.token, floors, session.staffName);
+      await joinRide({
+        token: session.token,
+        name: session.staffName,
+        companyId: session.companyId,
+        role: session.role,
+        floors,
+      });
       if (!mounted.current) return;
-      lastDeniedSeq.current = status.deniedSeq;
-      setSecondsLeft(Math.ceil(status.remainingMs / 1000));
-      setPhase('waiting');
+
+      const count = getRideState().riders.length;
+      setRiders(count);
+      setPhase('released');
+      announceBoardingHold(count);
+      returnTimer.current = setTimeout(() => {
+        if (mounted.current) onReleased();
+      }, RETURN_HOLD_MS);
     } catch (error) {
-      fail(errorMessage(error, 'The door could not be opened.'));
+      if (!mounted.current) return;
+      setDetail(
+        errorMessage(error, 'The elevator controller could not be reached over Bluetooth.'),
+      );
+      setPhase('error');
     }
-  }, [fail, floors, session.staffName, session.token]);
+  }, [
+    clearReturnTimer,
+    floors,
+    onReleased,
+    session.companyId,
+    session.role,
+    session.staffName,
+    session.token,
+  ]);
 
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
-      clearTimers();
+      clearReturnTimer();
     };
-  }, [clearTimers]);
+  }, [clearReturnTimer]);
 
   useEffect(() => {
-    if (hasOpened.current) return;
-    hasOpened.current = true;
-    void open();
-  }, [open]);
+    if (hasReleased.current) return;
+    hasReleased.current = true;
+    void release();
+  }, [release]);
 
-  useEffect(() => {
-    if (phase !== 'waiting' && phase !== 'moving') return;
-    const ticker = setInterval(() => void pollOnce(), POLL_INTERVAL_MS);
-    return () => clearInterval(ticker);
-  }, [phase, pollOnce]);
-
-  const handleCancel = useCallback(() => {
-    clearTimers();
-    void cancelElevatorSession();
+  const handleExit = useCallback(() => {
+    clearReturnTimer();
+    if (phase === 'error') {
+      void cancelVerificationSession(session.token);
+    }
     onCancel();
-  }, [clearTimers, onCancel]);
+  }, [clearReturnTimer, onCancel, phase, session.token]);
+
+  const handleContinue = useCallback(() => {
+    clearReturnTimer();
+    onReleased();
+  }, [clearReturnTimer, onReleased]);
+
+  const first = riders <= 1;
 
   return (
     <ScannerScaffold
       step="Step 3 of 3"
-      title="Door released"
+      title="Door release"
       subtitle={`${session.staffName} · ${session.companyId}`}
-      onExit={handleCancel}
+      onExit={handleExit}
       exitIcon="back"
       exitLabel="Back to barcode"
       camera={null}
       panel={
-        phase === 'arrived' ? (
+        phase === 'released' ? (
           <>
-            <PanelHead icon="checkCircle" color={colors.success} title="Arrived" />
+            <PanelHead
+              icon="checkCircle"
+              color={colors.success}
+              title={first ? 'Door opening' : `Rider ${riders} added`}
+            />
             <Text style={styles.body}>
-              {chosen ? floorLabel(chosen) : 'Your floor'} reached. The door is closed.
+              {first
+                ? 'The controller confirmed this rider and is opening the door.'
+                : 'The controller confirmed this rider. The door is already open and still held.'}
             </Text>
-          </>
-        ) : phase === 'moving' ? (
-          <>
-            <PanelHead icon="elevator" color={colors.primary} title="On the way" />
-            <Text style={styles.body}>
-              {chosen
-                ? `${floorLabel(chosen)} selected. The door is closed and the car is moving.`
-                : 'The door is closed and the car is moving.'}
-            </Text>
-          </>
-        ) : phase === 'timeout' ? (
-          <>
-            <PanelHead icon="warning" color={colors.warning} title="Door closed" />
-            <HintRow tone="warning" title="What happened">
-              No authorized floor button was pressed before the door closed. Scan your badge again
-              to reopen it.
+            <HintRow tone="success" title="Cleared floors">
+              {floors.map((floor) => floorShortLabel(floor)).join(' · ')}
             </HintRow>
+            <GeneralButton
+              label="Scan next badge"
+              icon="qr"
+              fullWidth
+              onPress={handleContinue}
+            />
           </>
         ) : phase === 'error' ? (
           <>
-            <PanelHead icon="error" color={colors.danger} title="Door not released" />
+            <PanelHead icon="error" color={colors.danger} title="Controller not reached" />
             <HintRow tone="danger" title="Why">
-              {detail ?? 'The elevator controller could not be reached.'}
+              {detail ?? 'The elevator controller could not be reached over Bluetooth.'}
+            </HintRow>
+            <HintRow tone="neutral" title="What to check">
+              Bluetooth is on, the controller is powered on, and this phone is close to the car.
             </HintRow>
             <View style={styles.row}>
               <GeneralButton
                 label="Back"
                 variant="outline"
                 icon="back"
-                onPress={handleCancel}
+                onPress={handleExit}
                 style={styles.rowBtn}
               />
               <GeneralButton
-                label="Retry"
+                label="Try again"
                 icon="refresh"
-                onPress={() => void open()}
+                onPress={() => void release()}
                 style={styles.rowBtn}
               />
             </View>
           </>
         ) : (
           <>
-            <PanelHead
-              icon="elevator"
-              color={colors.primary}
-              title={phase === 'opening' ? 'Opening the door…' : 'Press your floor button'}
-            />
+            <PanelHead icon="bluetooth" color={colors.primary} title="Releasing the door…" />
             <Text style={styles.body}>
-              {phase === 'opening'
-                ? 'Releasing the elevator door.'
-                : `Use the floor buttons in the car. ${secondsLeft}s left before the door closes.`}
+              Telling the elevator controller that {session.staffName} passed verification.
             </Text>
-            {phase === 'waiting' ? (
-              <HintRow tone="info" title="Your floors">
-                {floors.map((floor) => floorShortLabel(floor)).join(' · ')}
-              </HintRow>
-            ) : null}
+            <HintRow tone="info" title="Stay near the car">
+              The controller has to acknowledge this rider before the next badge can be scanned.
+            </HintRow>
           </>
         )
       }

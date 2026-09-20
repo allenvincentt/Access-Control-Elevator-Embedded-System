@@ -1,5 +1,5 @@
 import { CameraView } from "expo-camera";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { StyleSheet, Text, View } from "react-native";
 
 import type { VerificationSession } from "@/app/auth/scanner-screens/ScannerFlow";
@@ -24,6 +24,7 @@ import { verifyBarcode } from "@/services/verificationService";
 export type BarcodeScannerScreenProps = {
   onVerified: (session: VerificationSession) => void;
   onExit: () => void;
+  notice?: ReactNode;
 };
 
 const RESCAN_COOLDOWN_MS = 1500;
@@ -46,6 +47,7 @@ const HINTS = [
 export function BarcodeScannerScreen({
   onVerified,
   onExit,
+  notice,
 }: BarcodeScannerScreenProps) {
   const snackbar = useSnackbar();
 
@@ -197,6 +199,7 @@ export function BarcodeScannerScreen({
         }
         panel={
           <ShakeView signal={attempts} style={styles.panelStack}>
+            {notice}
             {status === "error" ? (
               <>
                 <View style={styles.panelHead}>

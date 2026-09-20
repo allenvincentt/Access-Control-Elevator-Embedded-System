@@ -3,6 +3,27 @@ import type { FloorKey } from '@/types/database';
 
 export type ElevatorState = 'idle' | 'door_open' | 'traveling';
 export type ElevatorSessionResult = 'none' | 'arrived' | 'timeout' | 'cancelled';
+export type RidePhase = 'idle' | 'boarding' | 'counting' | 'cleared';
+export type RideFault =
+  | 'none'
+  | 'mismatch'
+  | 'offline'
+  | 'cancelled'
+  | 'no_floor'
+  | 'hold_expired';
+
+export type BoardingStatus = {
+  phase: RidePhase;
+  expected: number;
+  observed: number;
+  attempt: number;
+  maxAttempts: number;
+  deadlineMs: number;
+  doorOpen: boolean;
+  emergency: boolean;
+  fault: RideFault;
+  faultSeq: number;
+};
 
 export type ElevatorStatus = {
   state: ElevatorState;
@@ -47,4 +68,19 @@ export async function readConnectedScannerCount(): Promise<number> {
 
 export async function cancelElevatorSession(): Promise<void> {
   unsupported();
+}
+
+export async function reportOccupancy(_count: number): Promise<void> {
+  unsupported();
+}
+
+export async function readBoardingStatus(): Promise<BoardingStatus> {
+  unsupported();
+}
+
+export function watchBoarding(
+  _listener: (status: BoardingStatus) => void,
+  _onError?: (error: AppError) => void,
+): () => void {
+  return () => undefined;
 }

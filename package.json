@@ -57,6 +57,7 @@
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
     "verify-face-model": "node ./scripts/verify-face-model.js",
+    "verify-person-model": "node ./scripts/verify-person-model.js",
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",

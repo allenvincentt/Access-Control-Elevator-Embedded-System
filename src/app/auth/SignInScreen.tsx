@@ -16,6 +16,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { HumanDetectionScreen } from "@/app/auth/scanner-screens/HumanDetectionScreen";
 import { ScannerFlow } from "@/app/auth/scanner-screens/ScannerFlow";
 import { HintRow } from "@/components/HintRow";
 import { useSnackbar } from "@/components/common/Snackbar";
@@ -64,12 +65,14 @@ export function SignInScreen() {
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [detecting, setDetecting] = useState(false);
   const [activeField, setActiveField] = useState<"email" | "password" | null>(
     null,
   );
   const [typing, setTyping] = useState(false);
   const [reaction, setReaction] = useState<"success" | "error" | null>(null);
   const [linkHovered, setLinkHovered] = useState(false);
+  const [detectorHovered, setDetectorHovered] = useState(false);
 
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reactionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -183,6 +186,10 @@ export function SignInScreen() {
     return <ScannerFlow onExit={() => setScanning(false)} />;
   }
 
+  if (detecting) {
+    return <HumanDetectionScreen onExit={() => setDetecting(false)} />;
+  }
+
   const heroBlock = (
     <>
       <Animated.Text
@@ -252,7 +259,19 @@ export function SignInScreen() {
                 onSubmitEditing={handleSubmit}
               />
 
-        <View style={styles.rowEnd}>
+        <View style={styles.rowBetween}>
+          <Pressable
+            accessibilityRole="button"
+            hitSlop={8}
+            disabled={busy}
+            onPress={() => setDetecting(true)}
+            onHoverIn={() => setDetectorHovered(true)}
+            onHoverOut={() => setDetectorHovered(false)}
+          >
+            <Text style={[styles.link, detectorHovered && styles.linkHovered]}>
+              Go to Human Detector →
+            </Text>
+          </Pressable>
           <Pressable
             accessibilityRole="button"
             hitSlop={8}
@@ -453,6 +472,13 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "flex-end",
+  },
+  rowBetween: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    flexWrap: "wrap",
+    gap: spacing.sm,
   },
   link: {
     color: colors.primary,

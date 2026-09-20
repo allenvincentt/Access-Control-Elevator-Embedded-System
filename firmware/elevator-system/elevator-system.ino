@@ -10,7 +10,9 @@ static const char *BLE_NAME = "ElevatorTerminal";
 static const char *SERVICE_UUID = "6e6c0001-b5a3-f393-e0a9-e50e24dcca9e";
 static const char *STATUS_CHAR_UUID = "6e6c0002-b5a3-f393-e0a9-e50e24dcca9e";
 static const char *COMMAND_CHAR_UUID = "6e6c0003-b5a3-f393-e0a9-e50e24dcca9e";
+static const char *BOARDING_CHAR_UUID = "6e6c0004-b5a3-f393-e0a9-e50e24dcca9e";
 static const char *DEVICE_KEY = "Elevator123";
+static const char *FIRMWARE_BUILD = "2026-09-20-count1";
 
 static const uint8_t INSIDE_FLOOR_BUTTON_COUNT = 3;
 static const uint8_t HALL_CALL_COUNT = 4;
@@ -55,6 +57,14 @@ static const uint32_t MOTOR_KICK_MS = 150;
 static const uint32_t ARRIVAL_CHIME_DELAY_MS = 1000;
 static const uint32_t ARROW_FRAME_MS = 220;
 static const uint32_t DEBOUNCE_MS = 30;
+
+static const uint32_t DOOR_HOLD_CAP_MS = 120000;
+static const uint32_t OCCUPANCY_WAIT_MS = 9000;
+static const uint8_t OCCUPANCY_MAX_ATTEMPTS = 3;
+static const uint8_t RIDER_LIMIT = 16;
+static const uint8_t ACK_SLOTS = 4;
+static const size_t STATUS_MAX_BYTES = 500;
+static const bool RIDE_MERGE_INTERSECTS = false;
 
 static const uint32_t MOTOR_PWM_FREQ = 20000;
 static const uint8_t MOTOR_PWM_BITS = 8;
@@ -163,8 +173,10 @@ struct ToneStep {
 
 static const ToneStep ARRIVAL_CHIME[] = {{1760, 140}, {0, 45}, {1319, 420}};
 static const ToneStep EMERGENCY_ALARM[] = {{988, 240}, {659, 240}};
+static const ToneStep CHECK_FAILED_TONE[] = {{523, 180}, {0, 70}, {392, 260}};
 static const uint8_t ARRIVAL_CHIME_STEPS = 3;
 static const uint8_t EMERGENCY_ALARM_STEPS = 2;
+static const uint8_t CHECK_FAILED_TONE_STEPS = 3;
 
 enum ElevatorState {
   STATE_IDLE,
@@ -188,7 +200,17 @@ enum DoorState {
   DOOR_CLOSING
 };
 
+enum RidePhase {
+  RIDE_NONE,
+  RIDE_BOARDING,
+  RIDE_COUNTING,
+  RIDE_CLEARED
+};
+
 static void publishStatus();
+static void publishBoarding();
+static void resetRide();
+static bool rideActive();
 static void beginDoorMotion(bool opening);
 static void armDoorHold(uint32_t now);
 static void beginMoving();
@@ -265,15 +287,39 @@ static const char *ackAction = "none";
 static bool ackOk = false;
 static const char *ackError = "none";
 
+struct AckRecord {
+  char id[24];
+  bool ok;
+  const char *error;
+};
+
+static AckRecord ackLog[ACK_SLOTS];
+static uint8_t ackCursor = 0;
+
+static RidePhase ridePhase = RIDE_NONE;
+static uint8_t expectedRiders = 0;
+static uint8_t observedRiders = 0;
+static uint8_t occupancyAttempt = 0;
+static bool boardingHold = false;
+static uint32_t holdStartedAt = 0;
+static uint32_t countRequestedAt = 0;
+static bool countReported = false;
+static const char *rideFault = "none";
+static uint32_t rideFaultSeq = 0;
+
 static bool buttonStableHigh[BUTTON_COUNT];
 static bool buttonLastReadHigh[BUTTON_COUNT];
 static uint32_t buttonChangedAt[BUTTON_COUNT];
 
 static BLECharacteristic *statusChar = nullptr;
+static BLECharacteristic *boardingChar = nullptr;
 static bool clientConnected = false;
 static volatile uint8_t bleClientCount = 0;
 static volatile bool commandPending = false;
-static char commandBuffer[256] = "";
+static char commandBuffer[320] = "";
+static volatile uint16_t oversizeWriteLen = 0;
+static uint32_t loopTicks = 0;
+static volatile uint32_t commandWrites = 0;
 
 static void ledcConfigure(uint8_t pin, uint32_t frequency, uint8_t bits, uint8_t channel) {
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
@@ -384,6 +430,12 @@ static void setEmergency(bool active) {
   if (active) {
     clearAllCalls();
     travelDirection = 0;
+    if (rideActive()) {
+      rideFault = "cancelled";
+      rideFaultSeq++;
+    }
+    resetRide();
+    publishBoarding();
     startTone(EMERGENCY_ALARM, EMERGENCY_ALARM_STEPS, true);
     Serial.println("[emergency] alarm ON, buttons locked out");
     if (travelPhase == TRAVEL_NONE || travelPhase == TRAVEL_AWAIT_DOOR) {
@@ -586,6 +638,21 @@ static void clearGrant() {
   pendingGrantClear = false;
 }
 
+static bool rideActive() {
+  return ridePhase == RIDE_BOARDING || ridePhase == RIDE_COUNTING;
+}
+
+static void resetRide() {
+  ridePhase = RIDE_NONE;
+  expectedRiders = 0;
+  observedRiders = 0;
+  occupancyAttempt = 0;
+  boardingHold = false;
+  holdStartedAt = 0;
+  countRequestedAt = 0;
+  countReported = false;
+}
+
 static void serviceDoor() {
   uint32_t now = millis();
 
@@ -610,6 +677,18 @@ static void serviceDoor() {
     Serial.println(opening ? "[door] fully open" : "[door] fully closed");
 
     if (!opening) {
+      if (ridePhase == RIDE_BOARDING) {
+        ridePhase = RIDE_COUNTING;
+        observedRiders = 0;
+        countRequestedAt = now;
+        countReported = false;
+        rideFault = "none";
+        Serial.print("[ride] door closed, counting occupants, expecting ");
+        Serial.println((unsigned)expectedRiders);
+        publishBoarding();
+        publishStatus();
+        return;
+      }
       if (pendingGrantClear) {
         clearGrant();
         Serial.println("[grant] authorization consumed, secured state");
@@ -626,7 +705,8 @@ static void serviceDoor() {
 
   uint32_t holdMs = (state == STATE_DOOR_OPEN) ? DOOR_BOARDING_HOLD_MS
                                                : DOOR_ARRIVAL_HOLD_MS;
-  if (doorState == DOOR_OPEN && !emergencyActive && now - doorOpenSince >= holdMs) {
+  if (doorState == DOOR_OPEN && !emergencyActive && !boardingHold &&
+      now - doorOpenSince >= holdMs) {
     Serial.print("[door] hold elapsed after ");
     Serial.print(holdMs / 1000);
     Serial.println("s, closing");
@@ -792,6 +872,12 @@ static const char *captionText() {
   if (emergencyActive) {
     return "EMERGENCY";
   }
+  if (ridePhase == RIDE_COUNTING) {
+    return "CHECKING CAR";
+  }
+  if (ridePhase == RIDE_BOARDING && boardingHold && doorState != DOOR_CLOSED) {
+    return selectedFloorIndex < 0 ? "HOLD-PICK FLOOR" : "DOOR HOLD";
+  }
   if (doorState == DOOR_OPENING) {
     return "DOOR OPENING";
   }
@@ -911,6 +997,7 @@ static void enterIdle() {
   motorStop();
   displayFloor = currentFloor;
   displayDirty = true;
+  resetRide();
   clearGrant();
   beginDoorMotion(false);
 }
@@ -925,7 +1012,22 @@ static const char *stateName() {
   return "idle";
 }
 
+static uint32_t rideDeadlineMs() {
+  if (ridePhase == RIDE_BOARDING && boardingHold) {
+    uint32_t elapsed = millis() - holdStartedAt;
+    return elapsed >= DOOR_HOLD_CAP_MS ? 0 : DOOR_HOLD_CAP_MS - elapsed;
+  }
+  if (ridePhase == RIDE_COUNTING) {
+    uint32_t elapsed = millis() - countRequestedAt;
+    return elapsed >= OCCUPANCY_WAIT_MS ? 0 : OCCUPANCY_WAIT_MS - elapsed;
+  }
+  return 0;
+}
+
 static uint32_t remainingWindowMs() {
+  if (rideActive()) {
+    return rideDeadlineMs();
+  }
   if (state != STATE_DOOR_OPEN) {
     return 0;
   }
@@ -982,7 +1084,9 @@ static bool commandAuthorized(const String &body) {
   return strcmp(key, DEVICE_KEY) == 0;
 }
 
-static String statusJson() {
+static String boardingJson();
+
+static String statusCore() {
   String json = "{";
   json += "\"state\":\"";
   json += stateName();
@@ -1003,22 +1107,6 @@ static String statusJson() {
   json += sessionResult;
   json += "\",\"remaining_ms\":";
   json += String(remainingWindowMs());
-  json += ",\"authorized_floors\":[";
-  bool firstFloorKey = true;
-  for (uint8_t i = 0; i < 3; i++) {
-    if (!floorAuthorized[i]) {
-      continue;
-    }
-    if (!firstFloorKey) {
-      json += ",";
-    }
-    firstFloorKey = false;
-    json += "\"";
-    json += FLOOR_KEY[i];
-    json += "\"";
-  }
-  json += "],\"buttons_enabled\":";
-  json += (!emergencyActive && floorButtonsArmed()) ? "true" : "false";
   json += ",\"denied_floor\":";
   if (deniedFloorIndex < 0 || deniedFloorIndex > 2) {
     json += "null";
@@ -1031,20 +1119,104 @@ static String statusJson() {
   json += String(deniedFloorSeq);
   json += ",\"clients\":";
   json += String((unsigned)bleClientCount);
-  json += ",\"emergency\":";
-  json += emergencyActive ? "true" : "false";
-  json += ",\"direction\":\"";
-  json += travelDirection > 0 ? "up" : (travelDirection < 0 ? "down" : "idle");
+  json += ",\"ride\":";
+  json += boardingJson();
+  json += ",\"fw\":\"";
+  json += FIRMWARE_BUILD;
   json += "\"";
+  json += ",\"up\":";
+  json += String(millis() / 1000);
+  json += ",\"lp\":";
+  json += String(loopTicks);
+  json += ",\"rx\":";
+  json += String((unsigned long)commandWrites);
   json += ",\"ack_id\":\"";
   json += ackId;
-  json += "\",\"ack_action\":\"";
-  json += ackAction;
   json += "\",\"ack_ok\":";
   json += ackOk ? "true" : "false";
   json += ",\"ack_error\":\"";
   json += ackError;
-  json += "\"}";
+  json += "\"";
+  return json;
+}
+
+static String statusJson(uint8_t slots) {
+  String json = statusCore();
+  if (slots == 0) {
+    json += "}";
+    return json;
+  }
+
+  json += ",\"acks\":[";
+  for (uint8_t i = 0; i < slots; i++) {
+    if (i > 0) {
+      json += ",";
+    }
+    uint8_t index = (uint8_t)((ackCursor + ACK_SLOTS - 1 - i) % ACK_SLOTS);
+    json += "{\"id\":\"";
+    json += ackLog[index].id;
+    json += "\",\"ok\":";
+    json += ackLog[index].ok ? "true" : "false";
+    json += ",\"err\":\"";
+    json += ackLog[index].error;
+    json += "\"}";
+  }
+  json += "]}";
+  return json;
+}
+
+static String statusPayload() {
+  for (uint8_t slots = ACK_SLOTS; slots > 0; slots--) {
+    String json = statusJson(slots);
+    if (json.length() <= STATUS_MAX_BYTES) {
+      return json;
+    }
+  }
+
+  String json = statusJson(0);
+  Serial.print("[ble] status payload over the ");
+  Serial.print(STATUS_MAX_BYTES);
+  Serial.print(" byte budget even with no acks, publishing ");
+  Serial.print(json.length());
+  Serial.println(" bytes");
+  return json;
+}
+
+static const char *ridePhaseName() {
+  if (ridePhase == RIDE_BOARDING) {
+    return "boarding";
+  }
+  if (ridePhase == RIDE_COUNTING) {
+    return "counting";
+  }
+  if (ridePhase == RIDE_CLEARED) {
+    return "cleared";
+  }
+  return "idle";
+}
+
+static String boardingJson() {
+  String json = "{\"s\":\"";
+  json += ridePhaseName();
+  json += "\",\"e\":";
+  json += String((unsigned)expectedRiders);
+  json += ",\"o\":";
+  json += String((unsigned)observedRiders);
+  json += ",\"a\":";
+  json += String((unsigned)occupancyAttempt);
+  json += ",\"m\":";
+  json += String((unsigned)OCCUPANCY_MAX_ATTEMPTS);
+  json += ",\"t\":";
+  json += String(rideDeadlineMs());
+  json += ",\"d\":";
+  json += (doorState != DOOR_CLOSED) ? "true" : "false";
+  json += ",\"g\":";
+  json += emergencyActive ? "true" : "false";
+  json += ",\"f\":\"";
+  json += rideFault;
+  json += "\",\"q\":";
+  json += String(rideFaultSeq);
+  json += "}";
   return json;
 }
 
@@ -1052,15 +1224,98 @@ static void publishStatus() {
   if (statusChar == nullptr) {
     return;
   }
-  String json = statusJson();
+  String json = statusPayload();
   statusChar->setValue((uint8_t *)json.c_str(), json.length());
   if (clientConnected) {
     statusChar->notify();
   }
 }
 
+static void publishBoarding() {
+  if (boardingChar == nullptr) {
+    return;
+  }
+  String json = boardingJson();
+  boardingChar->setValue((uint8_t *)json.c_str(), json.length());
+  if (clientConnected) {
+    boardingChar->notify();
+  }
+}
+
+static void mergeRider(const String &body) {
+  for (uint8_t i = 0; i < 3; i++) {
+    bool incoming = grantIncludesFloor(body, FLOOR_KEY[i]);
+    floorAuthorized[i] = RIDE_MERGE_INTERSECTS ? (floorAuthorized[i] && incoming)
+                                               : (floorAuthorized[i] || incoming);
+  }
+}
+
+static uint8_t authorizedFloorCount() {
+  uint8_t total = 0;
+  for (uint8_t i = 0; i < 3; i++) {
+    if (floorAuthorized[i]) {
+      total++;
+    }
+  }
+  return total;
+}
+
+static void processJoin(const String &body) {
+  if (expectedRiders >= RIDER_LIMIT) {
+    ackOk = false;
+    ackError = "car_full";
+    Serial.println("[ride] join rejected: rider limit reached");
+    return;
+  }
+
+  bool previous[3];
+  for (uint8_t i = 0; i < 3; i++) {
+    previous[i] = floorAuthorized[i];
+  }
+
+  mergeRider(body);
+
+  if (authorizedFloorCount() == 0) {
+    for (uint8_t i = 0; i < 3; i++) {
+      floorAuthorized[i] = previous[i];
+    }
+    ackOk = false;
+    ackError = "no_shared_floor";
+    Serial.println("[ride] join rejected: no floor shared with the group");
+    return;
+  }
+
+  if (selectedFloorIndex >= 0 && !floorAuthorized[selectedFloorIndex]) {
+    callInside[selectedFloorIndex] = false;
+    selectedFloorIndex = -1;
+    Serial.println("[ride] selected floor dropped, the new rider is not cleared for it");
+  }
+
+  expectedRiders++;
+  holdStartedAt = millis();
+  lastInputAt = holdStartedAt;
+  rideFault = "none";
+  extractJsonString(body, "staff", grantStaff, sizeof(grantStaff));
+  displayDirty = true;
+
+  ackOk = true;
+  ackError = "none";
+
+  Serial.print("[ride] rider ");
+  Serial.print((unsigned)expectedRiders);
+  Serial.print(" joined: ");
+  Serial.println(grantStaff[0] == '\0' ? "unnamed staff" : grantStaff);
+
+  publishBoarding();
+}
+
 static void processGrant(const String &body) {
   ackAction = "grant";
+
+  if (state == STATE_DOOR_OPEN && ridePhase == RIDE_BOARDING) {
+    processJoin(body);
+    return;
+  }
 
   if (state != STATE_IDLE) {
     ackOk = false;
@@ -1098,6 +1353,15 @@ static void processGrant(const String &body) {
   pendingGrantClear = false;
   grantActive = true;
   boardingFloor = currentFloor;
+  ridePhase = RIDE_BOARDING;
+  expectedRiders = 1;
+  observedRiders = 0;
+  occupancyAttempt = 0;
+  boardingHold = true;
+  holdStartedAt = grantOpenedAt;
+  countRequestedAt = 0;
+  countReported = false;
+  rideFault = "none";
   callInside[currentFloor] = false;
   callUp[currentFloor] = false;
   callDown[currentFloor] = false;
@@ -1117,6 +1381,8 @@ static void processGrant(const String &body) {
     }
   }
   Serial.println();
+
+  publishBoarding();
 }
 
 static void processReset() {
@@ -1126,6 +1392,13 @@ static void processReset() {
   lastInputAt = millis();
   ackOk = true;
   ackError = "none";
+
+  if (rideActive()) {
+    rideFault = "cancelled";
+    rideFaultSeq++;
+  }
+  resetRide();
+  publishBoarding();
 
   for (uint8_t i = 0; i < 3; i++) {
     callInside[i] = false;
@@ -1144,6 +1417,138 @@ static void processReset() {
 static void commitAck(const char *cmdId) {
   strncpy(ackId, cmdId, sizeof(ackId) - 1);
   ackId[sizeof(ackId) - 1] = '\0';
+
+  AckRecord &slot = ackLog[ackCursor];
+  strncpy(slot.id, ackId, sizeof(slot.id) - 1);
+  slot.id[sizeof(slot.id) - 1] = '\0';
+  slot.ok = ackOk;
+  slot.error = ackError;
+  ackCursor = (uint8_t)((ackCursor + 1) % ACK_SLOTS);
+}
+
+static int32_t extractJsonInt(const String &body, const char *key, int32_t fallback) {
+  String needle = String("\"") + key + "\"";
+  int keyAt = body.indexOf(needle);
+  if (keyAt < 0) {
+    return fallback;
+  }
+  int colon = body.indexOf(':', keyAt + needle.length());
+  if (colon < 0) {
+    return fallback;
+  }
+  int cursor = colon + 1;
+  while (cursor < (int)body.length() && body[cursor] == ' ') {
+    cursor++;
+  }
+  int start = cursor;
+  if (cursor < (int)body.length() && body[cursor] == '-') {
+    cursor++;
+  }
+  int digits = 0;
+  while (cursor < (int)body.length() && body[cursor] >= '0' && body[cursor] <= '9') {
+    cursor++;
+    digits++;
+  }
+  if (digits == 0) {
+    return fallback;
+  }
+  return (int32_t)body.substring(start, cursor).toInt();
+}
+
+static void reopenForBoarding() {
+  ridePhase = RIDE_BOARDING;
+  boardingHold = true;
+  holdStartedAt = millis();
+  lastInputAt = holdStartedAt;
+  observedRiders = 0;
+  state = STATE_DOOR_OPEN;
+  displayDirty = true;
+  beginDoorMotion(true);
+  publishBoarding();
+  publishStatus();
+}
+
+static void cancelRide(const char *fault) {
+  rideFault = fault;
+  rideFaultSeq++;
+  beginDoorMotion(true);
+  resetRide();
+  state = STATE_IDLE;
+  travelPhase = TRAVEL_NONE;
+  selectedFloorIndex = -1;
+  sessionResult = "cancelled";
+  clearAllCalls();
+  clearGrant();
+  lastInputAt = millis();
+  displayDirty = true;
+  publishBoarding();
+  publishStatus();
+}
+
+static void failOccupancy(const char *fault) {
+  occupancyAttempt++;
+  startTone(CHECK_FAILED_TONE, CHECK_FAILED_TONE_STEPS, false);
+
+  Serial.print("[ride] occupancy check failed (");
+  Serial.print(fault);
+  Serial.print("), attempt ");
+  Serial.print((unsigned)occupancyAttempt);
+  Serial.print(" of ");
+  Serial.println((unsigned)OCCUPANCY_MAX_ATTEMPTS);
+
+  if (occupancyAttempt >= OCCUPANCY_MAX_ATTEMPTS) {
+    cancelRide("cancelled");
+    Serial.println("[ride] attempts exhausted, session cancelled, door reopened");
+    return;
+  }
+
+  rideFault = fault;
+  rideFaultSeq++;
+  reopenForBoarding();
+}
+
+static void releaseRide() {
+  ridePhase = RIDE_CLEARED;
+  rideFault = "none";
+  occupancyAttempt = 0;
+  state = STATE_IDLE;
+  travelPhase = TRAVEL_NONE;
+  lastInputAt = millis();
+  displayDirty = true;
+
+  Serial.print("[ride] occupancy matches (");
+  Serial.print((unsigned)observedRiders);
+  Serial.println("), motion released");
+
+  publishBoarding();
+  publishStatus();
+  startDispatch();
+}
+
+static void processOccupancy(const String &body) {
+  ackAction = "occupancy";
+
+  if (ridePhase != RIDE_COUNTING) {
+    ackOk = false;
+    ackError = "not_counting";
+    return;
+  }
+
+  int32_t count = extractJsonInt(body, "count", -1);
+  if (count < 0 || count > (int32_t)RIDER_LIMIT) {
+    ackOk = false;
+    ackError = "bad_count";
+    return;
+  }
+
+  observedRiders = (uint8_t)count;
+  countReported = true;
+  ackOk = true;
+  ackError = "none";
+
+  if (observedRiders == expectedRiders) {
+    releaseRide();
+  }
 }
 
 static void processCommand(const String &body) {
@@ -1151,6 +1556,29 @@ static void processCommand(const String &body) {
   char cmdId[24];
   extractJsonString(body, "action", action, sizeof(action));
   extractJsonString(body, "cmd_id", cmdId, sizeof(cmdId));
+
+  uint16_t oversize = oversizeWriteLen;
+  oversizeWriteLen = 0;
+
+  Serial.print("[command] rx ");
+  Serial.print(body.length());
+  Serial.print(" bytes, cmd_id=");
+  Serial.print(strlen(cmdId) == 0 ? "(none)" : cmdId);
+  Serial.print(", action=");
+  Serial.println(strlen(action) == 0 ? "(none)" : action);
+
+  if (oversize > 0) {
+    ackAction = "oversize";
+    ackOk = false;
+    ackError = "too_long";
+    Serial.print("[command] rejected: write was ");
+    Serial.print(oversize);
+    Serial.print(" bytes, buffer holds ");
+    Serial.println((unsigned)(sizeof(commandBuffer) - 1));
+    commitAck(cmdId);
+    publishStatus();
+    return;
+  }
 
   if (!commandAuthorized(body)) {
     ackAction = "denied";
@@ -1164,6 +1592,8 @@ static void processCommand(const String &body) {
 
   if (strcmp(action, "grant") == 0) {
     processGrant(body);
+  } else if (strcmp(action, "occupancy") == 0) {
+    processOccupancy(body);
   } else if (strcmp(action, "reset") == 0) {
     processReset();
   } else {
@@ -1358,6 +1788,9 @@ static void serveCurrentFloor() {
 }
 
 static void startDispatch() {
+  if (rideActive()) {
+    return;
+  }
   if (emergencyActive || state != STATE_IDLE || travelPhase != TRAVEL_NONE) {
     return;
   }
@@ -1430,11 +1863,13 @@ static void finishArrival() {
   if (currentFloor == LOBBY_FLOOR) {
     autoReturnTrip = false;
   }
+  resetRide();
+  publishBoarding();
   publishStatus();
 }
 
 static void onInsideFloorButton(uint8_t index) {
-  if (grantActive && !floorAuthorized[index]) {
+  if (!floorAuthorized[index]) {
     Serial.print("[inside] ignored, floor not assigned to ");
     Serial.print(grantStaff[0] == '\0' ? "this badge" : grantStaff);
     Serial.print(": ");
@@ -1465,6 +1900,16 @@ static void onInsideFloorButton(uint8_t index) {
   selectedFloorIndex = (int8_t)index;
   Serial.print("[inside] queued: ");
   Serial.println(FLOOR_KEY[index]);
+
+  if (rideActive()) {
+    if (strcmp(rideFault, "no_floor") == 0) {
+      rideFault = "none";
+    }
+    displayDirty = true;
+    publishBoarding();
+    publishStatus();
+    return;
+  }
 
   if (state == STATE_DOOR_OPEN) {
     int8_t direction = chooseDirection();
@@ -1508,6 +1953,30 @@ static void onDoorButton() {
     Serial.println("[door] button ignored, trip in progress");
     return;
   }
+
+  if (ridePhase == RIDE_COUNTING) {
+    Serial.println("[ride] count interrupted at the door button, reopening");
+    rideFault = "none";
+    reopenForBoarding();
+    return;
+  }
+
+  if (ridePhase == RIDE_BOARDING && doorState != DOOR_CLOSED && doorState != DOOR_CLOSING) {
+    if (selectedFloorIndex < 0) {
+      Serial.println("[ride] close refused, no floor selected yet");
+      rideFault = "no_floor";
+      rideFaultSeq++;
+      publishBoarding();
+      return;
+    }
+    boardingHold = false;
+    rideFault = "none";
+    Serial.println("[ride] boarding closed by hand, door closing before the count");
+    beginDoorMotion(false);
+    publishBoarding();
+    return;
+  }
+
   beginDoorMotion(doorState == DOOR_CLOSED || doorState == DOOR_CLOSING);
 }
 
@@ -1650,8 +2119,37 @@ static void serviceInactivity(uint32_t now) {
   startDispatch();
 }
 
+static void serviceRide(uint32_t now) {
+  if (ridePhase == RIDE_BOARDING) {
+    if (!boardingHold || now - holdStartedAt < DOOR_HOLD_CAP_MS) {
+      return;
+    }
+    if (selectedFloorIndex < 0) {
+      Serial.println("[ride] hold cap reached with no floor selected, cancelling");
+      cancelRide("cancelled");
+      return;
+    }
+    Serial.println("[ride] hold cap reached, closing the door and counting");
+    boardingHold = false;
+    rideFault = "hold_expired";
+    rideFaultSeq++;
+    beginDoorMotion(false);
+    publishBoarding();
+    return;
+  }
+
+  if (ridePhase == RIDE_COUNTING && now - countRequestedAt >= OCCUPANCY_WAIT_MS) {
+    failOccupancy(countReported ? "mismatch" : "offline");
+  }
+}
+
 static void serviceStateMachine() {
   uint32_t now = millis();
+
+  if (rideActive()) {
+    serviceRide(now);
+    return;
+  }
 
   if (state == STATE_DOOR_OPEN && now - grantOpenedAt >= DOOR_BOARDING_HOLD_MS) {
     sessionResult = "timeout";
@@ -1696,7 +2194,14 @@ class ServerCallbacks : public BLEServerCallbacks {
 
 class StatusCallbacks : public BLECharacteristicCallbacks {
   void onRead(BLECharacteristic *characteristic) override {
-    String json = statusJson();
+    String json = statusPayload();
+    characteristic->setValue((uint8_t *)json.c_str(), json.length());
+  }
+};
+
+class BoardingCallbacks : public BLECharacteristicCallbacks {
+  void onRead(BLECharacteristic *characteristic) override {
+    String json = boardingJson();
     characteristic->setValue((uint8_t *)json.c_str(), json.length());
   }
 };
@@ -1704,11 +2209,13 @@ class StatusCallbacks : public BLECharacteristicCallbacks {
 class CommandCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *characteristic) override {
     String value = characteristic->getValue().c_str();
-    if (value.length() == 0 || value.length() >= sizeof(commandBuffer)) {
+    if (value.length() == 0) {
       return;
     }
+    oversizeWriteLen = value.length() >= sizeof(commandBuffer) ? (uint16_t)value.length() : 0;
     strncpy(commandBuffer, value.c_str(), sizeof(commandBuffer) - 1);
     commandBuffer[sizeof(commandBuffer) - 1] = '\0';
+    commandWrites = commandWrites + 1;
     commandPending = true;
   }
 };
@@ -1721,6 +2228,12 @@ void setup() {
 
   Serial.begin(115200);
   delay(200);
+
+  for (uint8_t i = 0; i < ACK_SLOTS; i++) {
+    ackLog[i].id[0] = '\0';
+    ackLog[i].ok = false;
+    ackLog[i].error = "none";
+  }
 
   for (uint8_t i = 0; i < BUTTON_COUNT; i++) {
     pinMode(PIN_BUTTON[i], INPUT_PULLUP);
@@ -1785,6 +2298,12 @@ void setup() {
     BLECharacteristic::PROPERTY_WRITE);
   commandChar->setCallbacks(new CommandCallbacks());
 
+  boardingChar = service->createCharacteristic(
+    BOARDING_CHAR_UUID,
+    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+  boardingChar->addDescriptor(new BLE2902());
+  boardingChar->setCallbacks(new BoardingCallbacks());
+
   service->start();
 
   BLEAdvertising *advertising = BLEDevice::getAdvertising();
@@ -1793,12 +2312,16 @@ void setup() {
   BLEDevice::startAdvertising();
 
   publishStatus();
+  publishBoarding();
   Serial.print("[ble] advertising as \"");
   Serial.print(BLE_NAME);
-  Serial.println("\", terminal can now pair");
+  Serial.print("\", firmware build ");
+  Serial.print(FIRMWARE_BUILD);
+  Serial.println(", terminal can now pair");
 }
 
 void loop() {
+  loopTicks++;
   if (commandPending) {
     commandPending = false;
     processCommand(String(commandBuffer));
