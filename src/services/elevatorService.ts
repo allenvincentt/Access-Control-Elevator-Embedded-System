@@ -411,6 +411,14 @@ async function unacknowledged(cmdId: string): Promise<AppError> {
       );
     }
 
+    const dropped = counterOf(second, 'dr') ?? 0;
+    if (dropped > 0) {
+      return new AppError(
+        'ELEVATOR_QUEUE_FULL',
+        `The controller's command queue overflowed and has dropped ${dropped} write(s) (firmware ${build}), so ${cmdId} never reached the sketch. Retry, and stagger the two terminals if this keeps happening.`,
+      );
+    }
+
     const writes = counterOf(second, 'rx');
     if (writes === 0) {
       return new AppError(

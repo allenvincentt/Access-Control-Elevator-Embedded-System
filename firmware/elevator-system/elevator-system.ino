@@ -12,7 +12,7 @@ static const char *STATUS_CHAR_UUID = "6e6c0002-b5a3-f393-e0a9-e50e24dcca9e";
 static const char *COMMAND_CHAR_UUID = "6e6c0003-b5a3-f393-e0a9-e50e24dcca9e";
 static const char *BOARDING_CHAR_UUID = "6e6c0004-b5a3-f393-e0a9-e50e24dcca9e";
 static const char *DEVICE_KEY = "Elevator123";
-static const char *FIRMWARE_BUILD = "2026-09-20-count1";
+static const char *FIRMWARE_BUILD = "2026-09-20-ring1";
 
 static const uint8_t INSIDE_FLOOR_BUTTON_COUNT = 3;
 static const uint8_t HALL_CALL_COUNT = 4;
@@ -50,7 +50,6 @@ static const uint8_t LOBBY_FLOOR = 0;
 static const uint32_t DOOR_BOARDING_HOLD_MS = 8000;
 static const uint32_t DOOR_ARRIVAL_HOLD_MS = 5000;
 static const uint32_t DOOR_TRAVEL_MS = 900;
-static const uint32_t INACTIVITY_RETURN_MS = 30000;
 static const uint32_t FLOOR_TRAVEL_MS = 1400;
 static const uint32_t MOTOR_STOP_DELAY_MS = 700;
 static const uint32_t MOTOR_KICK_MS = 150;
@@ -63,6 +62,7 @@ static const uint32_t OCCUPANCY_WAIT_MS = 9000;
 static const uint8_t OCCUPANCY_MAX_ATTEMPTS = 3;
 static const uint8_t RIDER_LIMIT = 16;
 static const uint8_t ACK_SLOTS = 4;
+static const uint8_t COMMAND_SLOTS = 4;
 static const size_t STATUS_MAX_BYTES = 500;
 static const bool RIDE_MERGE_INTERSECTS = false;
 
@@ -243,7 +243,6 @@ static uint8_t selectedFloor = 0;
 static uint8_t displayFloor = 0;
 static int8_t travelStep = 0;
 static int8_t travelDirection = 0;
-static bool autoReturnTrip = false;
 
 static bool callInside[3] = {false, false, false};
 static bool callUp[3] = {false, false, false};
@@ -315,8 +314,16 @@ static BLECharacteristic *statusChar = nullptr;
 static BLECharacteristic *boardingChar = nullptr;
 static bool clientConnected = false;
 static volatile uint8_t bleClientCount = 0;
-static volatile bool commandPending = false;
-static char commandBuffer[320] = "";
+struct CommandRecord {
+  char body[320];
+  uint16_t oversize;
+};
+
+static CommandRecord commandQueue[COMMAND_SLOTS];
+static volatile uint8_t commandHead = 0;
+static volatile uint8_t commandTail = 0;
+static volatile uint32_t commandDropped = 0;
+static uint32_t reportedDrops = 0;
 static volatile uint16_t oversizeWriteLen = 0;
 static uint32_t loopTicks = 0;
 static volatile uint32_t commandWrites = 0;
@@ -992,7 +999,6 @@ static void enterIdle() {
   state = STATE_IDLE;
   travelPhase = TRAVEL_NONE;
   travelStep = 0;
-  autoReturnTrip = false;
   lastInputAt = millis();
   motorStop();
   displayFloor = currentFloor;
@@ -1130,6 +1136,10 @@ static String statusCore() {
   json += String(loopTicks);
   json += ",\"rx\":";
   json += String((unsigned long)commandWrites);
+  if (commandDropped > 0) {
+    json += ",\"dr\":";
+    json += String((unsigned long)commandDropped);
+  }
   json += ",\"ack_id\":\"";
   json += ackId;
   json += "\",\"ack_ok\":";
@@ -1574,7 +1584,7 @@ static void processCommand(const String &body) {
     Serial.print("[command] rejected: write was ");
     Serial.print(oversize);
     Serial.print(" bytes, buffer holds ");
-    Serial.println((unsigned)(sizeof(commandBuffer) - 1));
+    Serial.println((unsigned)(sizeof(commandQueue[0].body) - 1));
     commitAck(cmdId);
     publishStatus();
     return;
@@ -1837,8 +1847,7 @@ static void finishArrival() {
     travelDirection = 0;
   }
 
-  if (!autoReturnTrip && selectedFloorIndex >= 0 &&
-      currentFloor == (uint8_t)selectedFloorIndex) {
+  if (selectedFloorIndex >= 0 && currentFloor == (uint8_t)selectedFloorIndex) {
     sessionResult = "arrived";
   }
 
@@ -1855,14 +1864,8 @@ static void finishArrival() {
     beginDoorMotion(true);
   } else {
     Serial.println("[door] staying closed, 2FA not completed for this floor");
-    if (autoReturnTrip) {
-      clearGrant();
-    }
   }
 
-  if (currentFloor == LOBBY_FLOOR) {
-    autoReturnTrip = false;
-  }
   resetRide();
   publishBoarding();
   publishStatus();
@@ -1895,7 +1898,6 @@ static void onInsideFloorButton(uint8_t index) {
     return;
   }
 
-  autoReturnTrip = false;
   callInside[index] = true;
   selectedFloorIndex = (int8_t)index;
   Serial.print("[inside] queued: ");
@@ -1925,7 +1927,6 @@ static void onHallCallButton(uint8_t slot) {
   uint8_t floor = HALL_CALL_FLOOR[slot];
   bool up = HALL_CALL_IS_UP[slot];
 
-  autoReturnTrip = false;
   if (up) {
     callUp[floor] = true;
   } else {
@@ -2099,26 +2100,6 @@ static void serviceTravel(uint32_t now) {
   publishStatus();
 }
 
-static void serviceInactivity(uint32_t now) {
-  if (state != STATE_IDLE || doorState != DOOR_CLOSED) {
-    return;
-  }
-  if (anyCallPending() || currentFloor == LOBBY_FLOOR) {
-    return;
-  }
-  if (now - lastInputAt < INACTIVITY_RETURN_MS) {
-    return;
-  }
-
-  lastInputAt = now;
-  autoReturnTrip = true;
-  callInside[LOBBY_FLOOR] = true;
-  Serial.print("[inactivity] ");
-  Serial.print(INACTIVITY_RETURN_MS / 1000);
-  Serial.println("s without input, returning to FirstFloor");
-  startDispatch();
-}
-
 static void serviceRide(uint32_t now) {
   if (ridePhase == RIDE_BOARDING) {
     if (!boardingHold || now - holdStartedAt < DOOR_HOLD_CAP_MS) {
@@ -2167,7 +2148,6 @@ static void serviceStateMachine() {
   }
 
   startDispatch();
-  serviceInactivity(now);
 }
 
 class ServerCallbacks : public BLEServerCallbacks {
@@ -2212,11 +2192,22 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
     if (value.length() == 0) {
       return;
     }
-    oversizeWriteLen = value.length() >= sizeof(commandBuffer) ? (uint16_t)value.length() : 0;
-    strncpy(commandBuffer, value.c_str(), sizeof(commandBuffer) - 1);
-    commandBuffer[sizeof(commandBuffer) - 1] = '\0';
+
+    uint8_t head = commandHead;
+    uint8_t next = (uint8_t)((head + 1) % COMMAND_SLOTS);
+    if (next == commandTail) {
+      commandDropped = commandDropped + 1;
+      return;
+    }
+
+    CommandRecord &slot = commandQueue[head];
+    slot.oversize = value.length() >= sizeof(slot.body) ? (uint16_t)value.length() : 0;
+    strncpy(slot.body, value.c_str(), sizeof(slot.body) - 1);
+    slot.body[sizeof(slot.body) - 1] = '\0';
     commandWrites = commandWrites + 1;
-    commandPending = true;
+
+    __sync_synchronize();
+    commandHead = next;
   }
 };
 
@@ -2322,9 +2313,20 @@ void setup() {
 
 void loop() {
   loopTicks++;
-  if (commandPending) {
-    commandPending = false;
-    processCommand(String(commandBuffer));
+  while (commandTail != commandHead) {
+    __sync_synchronize();
+    uint8_t tail = commandTail;
+    CommandRecord &slot = commandQueue[tail];
+    oversizeWriteLen = slot.oversize;
+    processCommand(String(slot.body));
+    commandTail = (uint8_t)((tail + 1) % COMMAND_SLOTS);
+  }
+
+  if (commandDropped != reportedDrops) {
+    reportedDrops = commandDropped;
+    Serial.print("[command] queue full, dropped ");
+    Serial.print((unsigned long)reportedDrops);
+    Serial.println(" write(s) total, sender will time out and retry");
   }
   pollButtons();
   serviceDoor();
