@@ -60,6 +60,7 @@ static const uint32_t DEBOUNCE_MS = 30;
 static const uint32_t DOOR_HOLD_CAP_MS = 120000;
 static const uint32_t OCCUPANCY_WAIT_MS = 9000;
 static const uint8_t OCCUPANCY_MAX_ATTEMPTS = 3;
+static const uint8_t OCCUPANCY_CONFIRM_REPORTS = 3;
 static const uint8_t RIDER_LIMIT = 16;
 static const uint8_t ACK_SLOTS = 4;
 static const uint8_t COMMAND_SLOTS = 4;
@@ -298,6 +299,9 @@ static uint8_t ackCursor = 0;
 static RidePhase ridePhase = RIDE_NONE;
 static uint8_t expectedRiders = 0;
 static uint8_t observedRiders = 0;
+static uint8_t peakRiders = 0;
+static uint8_t lastReportedRiders = 0xFF;
+static uint8_t occupancyStreak = 0;
 static uint8_t occupancyAttempt = 0;
 static bool boardingHold = false;
 static uint32_t holdStartedAt = 0;
@@ -653,6 +657,9 @@ static void resetRide() {
   ridePhase = RIDE_NONE;
   expectedRiders = 0;
   observedRiders = 0;
+  peakRiders = 0;
+  lastReportedRiders = 0xFF;
+  occupancyStreak = 0;
   occupancyAttempt = 0;
   boardingHold = false;
   holdStartedAt = 0;
@@ -687,6 +694,9 @@ static void serviceDoor() {
       if (ridePhase == RIDE_BOARDING) {
         ridePhase = RIDE_COUNTING;
         observedRiders = 0;
+        peakRiders = 0;
+        lastReportedRiders = 0xFF;
+        occupancyStreak = 0;
         countRequestedAt = now;
         countReported = false;
         rideFault = "none";
@@ -1216,6 +1226,8 @@ static String boardingJson() {
   json += String((unsigned)expectedRiders);
   json += ",\"o\":";
   json += String((unsigned)observedRiders);
+  json += ",\"p\":";
+  json += String((unsigned)peakRiders);
   json += ",\"a\":";
   json += String((unsigned)occupancyAttempt);
   json += ",\"m\":";
@@ -1370,6 +1382,9 @@ static void processGrant(const String &body) {
   ridePhase = RIDE_BOARDING;
   expectedRiders = 1;
   observedRiders = 0;
+  peakRiders = 0;
+  lastReportedRiders = 0xFF;
+  occupancyStreak = 0;
   occupancyAttempt = 0;
   boardingHold = true;
   holdStartedAt = grantOpenedAt;
@@ -1475,6 +1490,9 @@ static void reopenForBoarding() {
   holdStartedAt = millis();
   lastInputAt = holdStartedAt;
   observedRiders = 0;
+  peakRiders = 0;
+  lastReportedRiders = 0xFF;
+  occupancyStreak = 0;
   state = STATE_DOOR_OPEN;
   displayDirty = true;
   beginDoorMotion(true);
@@ -1557,10 +1575,36 @@ static void processOccupancy(const String &body) {
 
   observedRiders = (uint8_t)count;
   countReported = true;
+
+  if (observedRiders == lastReportedRiders) {
+    if (occupancyStreak < 255) {
+      occupancyStreak++;
+    }
+  } else {
+    lastReportedRiders = observedRiders;
+    occupancyStreak = 1;
+  }
+
+  bool confirmed = occupancyStreak >= OCCUPANCY_CONFIRM_REPORTS;
+  if (confirmed && observedRiders > peakRiders) {
+    peakRiders = observedRiders;
+  }
+
   ackOk = true;
   ackError = "none";
 
-  if (observedRiders == expectedRiders) {
+  Serial.print("[ride] count ");
+  Serial.print((unsigned)observedRiders);
+  Serial.print(", streak ");
+  Serial.print((unsigned)occupancyStreak);
+  Serial.print("/");
+  Serial.print((unsigned)OCCUPANCY_CONFIRM_REPORTS);
+  Serial.print(", peak ");
+  Serial.print((unsigned)peakRiders);
+  Serial.print(", expecting ");
+  Serial.println((unsigned)expectedRiders);
+
+  if (confirmed && observedRiders == expectedRiders && peakRiders == expectedRiders) {
     releaseRide();
   }
 }
