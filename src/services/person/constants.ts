@@ -100,6 +100,11 @@ export const PERSON_DETECTION = {
   detectorFailureLimit: 6,
   reportRetryMs: 1200,
 
+  boxSmoothingFloor: 0.45,
+  boxFollowGain: 2.5,
+  boxGlideMinMs: 80,
+  boxGlideMaxMs: 600,
+
   /**
    * Draws the per-stage detection counts over the camera, so a frame that counts
    * nobody can be traced to the stage that dropped them rather than guessed at.

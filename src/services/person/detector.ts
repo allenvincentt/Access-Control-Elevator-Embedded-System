@@ -18,6 +18,7 @@ import {
   intersectionOverUnion,
   rectArea,
   unionRect,
+  type Rect,
 } from '@/services/person/geometry';
 import { loadPersonModel, PersonModelError } from '@/services/person/model';
 
@@ -29,6 +30,7 @@ export type PersonBox = {
   score: number;
   inRoi: boolean;
   scope: PersonScopeAnchor | null;
+  fit: Rect;
 };
 
 export type DetectionFrame = {
@@ -421,7 +423,16 @@ export async function detectPeople(
     if (right - left < gate.minBoxWidth) continue;
     if (bottom - top < gate.minBoxHeight) continue;
 
-    candidates.push({ left, top, right, bottom, score, inRoi: false, scope: null });
+    candidates.push({
+      left,
+      top,
+      right,
+      bottom,
+      score,
+      inRoi: false,
+      scope: null,
+      fit: { left, top, right, bottom },
+    });
   }
 
   // Merge before testing against the region, so the shape gates and the foot

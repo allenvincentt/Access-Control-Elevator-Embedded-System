@@ -5,9 +5,15 @@ import {
   AppState,
   StyleSheet,
   Text,
-  View,
   useWindowDimensions,
+  View,
 } from "react-native";
+import Animated, {
+  Easing,
+  useAnimatedProps,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
 import Svg, { Rect } from "react-native-svg";
 
 import { useSnackbar } from "@/components/common/Snackbar";
@@ -38,13 +44,16 @@ import {
   detectPeople,
   discardFile,
   type DetectionStats,
-  type PersonBox,
 } from "@/services/person/detector";
 import {
   warmUpPersonModel,
   type PersonModelState,
 } from "@/services/person/model";
-import { PersonTracker, type TrackedCount } from "@/services/person/tracker";
+import {
+  PersonTracker,
+  type PersonTrack,
+  type TrackedCount,
+} from "@/services/person/tracker";
 import { refreshBoarding, watchBoardingOnly } from "@/services/rideSession";
 
 export type HumanDetectionScreenProps = {
@@ -57,9 +66,20 @@ type Frame = {
   height: number;
 };
 
+type OverlayBox = {
+  id: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  counted: boolean;
+};
+
 const DANGER = "#FF6B60";
 const SUCCESS = "#4ADE80";
 const PANEL_MAX_WIDTH = 380;
+
+const AnimatedRect = Animated.createAnimatedComponent(Rect);
 
 export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
   const snackbar = useSnackbar();
@@ -79,12 +99,15 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
   const reportedKey = useRef<string | null>(null);
   const reportedAt = useRef(0);
   const detectorMisses = useRef(0);
+  const lastFrameAt = useRef(0);
 
   const [cameraReady, setCameraReady] = useState(false);
   const [appActive, setAppActive] = useState(true);
   const [landscape, setLandscape] = useState(false);
   const [model, setModel] = useState<PersonModelState | null>(null);
-  const [boxes, setBoxes] = useState<PersonBox[]>([]);
+  const [glideMs, setGlideMs] = useState<number>(
+    PERSON_DETECTION.boxGlideMinMs,
+  );
   const [stats, setStats] = useState<DetectionStats | null>(null);
   const [tracked, setTracked] = useState<TrackedCount | null>(null);
   const [source, setSource] = useState<{
@@ -165,6 +188,7 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
 
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    lastFrameAt.current = 0;
 
     const wait = (ms: number) =>
       new Promise<void>((resolve) => {
@@ -222,7 +246,18 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
 
         detectorMisses.current = 0;
         const next = tracker.current.push(outcome.boxes);
-        setBoxes(outcome.boxes);
+        const now = Date.now();
+        const gap =
+          lastFrameAt.current > 0
+            ? now - lastFrameAt.current
+            : PERSON_DETECTION.boxGlideMinMs;
+        lastFrameAt.current = now;
+        setGlideMs(
+          Math.min(
+            PERSON_DETECTION.boxGlideMaxMs,
+            Math.max(PERSON_DETECTION.boxGlideMinMs, gap),
+          ),
+        );
         setStats(outcome.stats);
         setTracked(next);
 
@@ -269,7 +304,12 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
   const observed = tracked?.count ?? 0;
   const matches = counting && observed === expected;
 
-  const overlay = buildOverlay(boxes, source, viewWidth, viewHeight);
+  const overlay = buildOverlay(
+    tracked?.visible ?? [],
+    source,
+    viewWidth,
+    viewHeight,
+  );
   const wide = viewWidth > viewHeight;
 
   if (model && !model.ready) {
@@ -321,7 +361,7 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
             <CameraView
               ref={cameraRef}
               style={StyleSheet.absoluteFill}
-              facing="front"
+              facing="back"
               active={appActive}
               animateShutter={false}
               onCameraReady={() => setCameraReady(true)}
@@ -330,26 +370,20 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
               <Rect
                 x={PERSON_ROI_WIDE.left * viewWidth}
                 y={PERSON_ROI_WIDE.top * viewHeight}
-                width={(PERSON_ROI_WIDE.right - PERSON_ROI_WIDE.left) * viewWidth}
-                height={(PERSON_ROI_WIDE.bottom - PERSON_ROI_WIDE.top) * viewHeight}
+                width={
+                  (PERSON_ROI_WIDE.right - PERSON_ROI_WIDE.left) * viewWidth
+                }
+                height={
+                  (PERSON_ROI_WIDE.bottom - PERSON_ROI_WIDE.top) * viewHeight
+                }
                 fill="none"
                 stroke="rgba(255,255,255,0.45)"
                 strokeWidth={2}
                 strokeDasharray="10 8"
                 rx={radius.lg}
               />
-              {overlay.map((box, index) => (
-                <Rect
-                  key={`${index}-${box.x}-${box.y}`}
-                  x={box.x}
-                  y={box.y}
-                  width={box.width}
-                  height={box.height}
-                  fill="none"
-                  stroke={box.inRoi ? SUCCESS : "rgba(255,255,255,0.4)"}
-                  strokeWidth={box.inRoi ? 3 : 2}
-                  rx={radius.sm}
-                />
+              {overlay.map((box) => (
+                <TrackBox key={box.id} box={box} glideMs={glideMs} />
               ))}
             </Svg>
             {PERSON_DETECTION.showDiagnostics && stats ? (
@@ -491,12 +525,44 @@ function PanelHead({
   );
 }
 
+function TrackBox({ box, glideMs }: { box: OverlayBox; glideMs: number }) {
+  const x = useSharedValue(box.x);
+  const y = useSharedValue(box.y);
+  const width = useSharedValue(box.width);
+  const height = useSharedValue(box.height);
+
+  useEffect(() => {
+    const timing = { duration: glideMs, easing: Easing.linear };
+    x.value = withTiming(box.x, timing);
+    y.value = withTiming(box.y, timing);
+    width.value = withTiming(box.width, timing);
+    height.value = withTiming(box.height, timing);
+  }, [box.x, box.y, box.width, box.height, glideMs, x, y, width, height]);
+
+  const animatedProps = useAnimatedProps(() => ({
+    x: x.value,
+    y: y.value,
+    width: width.value,
+    height: height.value,
+  }));
+
+  return (
+    <AnimatedRect
+      animatedProps={animatedProps}
+      fill="none"
+      stroke={box.counted ? SUCCESS : "rgba(255,255,255,0.55)"}
+      strokeWidth={box.counted ? 3 : 2}
+      rx={radius.sm}
+    />
+  );
+}
+
 function buildOverlay(
-  boxes: PersonBox[],
+  tracks: PersonTrack[],
   source: { width: number; height: number } | null,
   viewWidth: number,
   viewHeight: number,
-) {
+): OverlayBox[] {
   if (!source || source.width <= 0 || source.height <= 0) return [];
 
   const scale = Math.max(viewWidth / source.width, viewHeight / source.height);
@@ -505,12 +571,13 @@ function buildOverlay(
   const offsetX = (viewWidth - renderedWidth) / 2;
   const offsetY = (viewHeight - renderedHeight) / 2;
 
-  return boxes.map((box) => ({
-    x: offsetX + box.left * renderedWidth,
-    y: offsetY + box.top * renderedHeight,
-    width: Math.max(1, (box.right - box.left) * renderedWidth),
-    height: Math.max(1, (box.bottom - box.top) * renderedHeight),
-    inRoi: box.inRoi,
+  return tracks.map(({ id, view, confirmed }) => ({
+    id,
+    x: offsetX + view.left * renderedWidth,
+    y: offsetY + view.top * renderedHeight,
+    width: Math.max(1, (view.right - view.left) * renderedWidth),
+    height: Math.max(1, (view.bottom - view.top) * renderedHeight),
+    counted: confirmed,
   }));
 }
 

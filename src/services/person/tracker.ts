@@ -1,10 +1,15 @@
 import { PERSON_DETECTION } from '@/services/person/constants';
 import type { PersonBox } from '@/services/person/detector';
-import { intersectionOverSmaller, intersectionOverUnion } from '@/services/person/geometry';
+import {
+  intersectionOverSmaller,
+  intersectionOverUnion,
+  type Rect,
+} from '@/services/person/geometry';
 
 export type PersonTrack = {
   id: number;
   box: PersonBox;
+  view: Rect;
   hits: number;
   misses: number;
   confirmed: boolean;
@@ -15,7 +20,28 @@ export type TrackedCount = {
   stable: boolean;
   progress: number;
   tracks: PersonTrack[];
+  visible: PersonTrack[];
 };
+
+function follow(current: Rect, target: Rect): Rect {
+  const width = Math.max(current.right - current.left, 1e-3);
+  const height = Math.max(current.bottom - current.top, 1e-3);
+  const shiftX =
+    Math.abs(target.left + target.right - current.left - current.right) / 2 / width;
+  const shiftY =
+    Math.abs(target.top + target.bottom - current.top - current.bottom) / 2 / height;
+  const weight = Math.min(
+    1,
+    PERSON_DETECTION.boxSmoothingFloor + Math.max(shiftX, shiftY) * PERSON_DETECTION.boxFollowGain,
+  );
+
+  return {
+    left: current.left + (target.left - current.left) * weight,
+    top: current.top + (target.top - current.top) * weight,
+    right: current.right + (target.right - current.right) * weight,
+    bottom: current.bottom + (target.bottom - current.bottom) * weight,
+  };
+}
 
 type Pairing = {
   track: number;
@@ -66,6 +92,7 @@ export class PersonTracker {
 
       const track = this.tracks[pairing.track];
       track.box = candidates[pairing.candidate];
+      track.view = follow(track.view, track.box.fit);
       track.hits += 1;
       track.misses = 0;
       track.confirmed = track.hits >= PERSON_DETECTION.trackConfirmFrames;
@@ -95,6 +122,7 @@ export class PersonTracker {
       this.tracks.push({
         id: this.nextId,
         box: candidate,
+        view: { ...candidate.fit },
         hits: 1,
         misses: 0,
         confirmed: PERSON_DETECTION.trackConfirmFrames <= 1,
@@ -126,6 +154,11 @@ export class PersonTracker {
       stable: this.steadyFrames >= PERSON_DETECTION.stableFrames,
       progress: Math.min(1, this.steadyFrames / PERSON_DETECTION.stableFrames),
       tracks: counted,
+      visible: this.tracks.filter(
+        (track) =>
+          track.misses === 0 ||
+          (track.confirmed && track.misses <= PERSON_DETECTION.trackCountGrace),
+      ),
     };
   }
 
