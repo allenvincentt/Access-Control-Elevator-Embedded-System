@@ -1,6 +1,6 @@
-import type { IconName } from '@/components/ui/Icon';
+import type { IconName } from "@/components/ui/Icon";
 
-export type AdminSection = 'home' | 'logs' | 'staff' | 'me';
+export type AdminSection = "home" | "logs" | "staff" | "me";
 
 export type AdminNavItem = {
   section: AdminSection;
@@ -16,20 +16,27 @@ export type AdminNavGroup = {
 
 export const adminNavigation: AdminNavGroup[] = [
   {
-    label: 'Overview',
+    label: "Overview",
     items: [
-      { section: 'home', label: 'Home', icon: 'home' },
-      { section: 'logs', label: 'Access logs', shortLabel: 'Logs', icon: 'logs' },
+      { section: "home", label: "Home", icon: "home" },
+      {
+        section: "logs",
+        label: "Access Logs",
+        shortLabel: "Logs",
+        icon: "logs",
+      },
     ],
   },
   {
-    label: 'Directory',
-    items: [{ section: 'staff', label: 'Staff', icon: 'staff' }],
+    label: "Directory",
+    items: [{ section: "staff", label: "Staff", icon: "staff" }],
   },
   {
-    label: 'Account',
-    items: [{ section: 'me', label: 'Me', icon: 'me' }],
+    label: "Account",
+    items: [{ section: "me", label: "Me", icon: "me" }],
   },
 ];
 
-export const adminNavFlat: AdminNavItem[] = adminNavigation.flatMap((group) => group.items);
+export const adminNavFlat: AdminNavItem[] = adminNavigation.flatMap(
+  (group) => group.items,
+);

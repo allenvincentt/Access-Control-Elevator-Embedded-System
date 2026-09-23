@@ -23,6 +23,16 @@ export type ScannerPresence = {
   error: string | null;
 };
 
+function samePresence(a: ScannerPresence, b: ScannerPresence): boolean {
+  return (
+    a.supported === b.supported &&
+    a.reachable === b.reachable &&
+    a.online === b.online &&
+    a.checking === b.checking &&
+    a.error === b.error
+  );
+}
+
 const UNSUPPORTED: ScannerPresence = {
   supported: false,
   reachable: false,
@@ -48,6 +58,10 @@ export function useScannerPresence(): ScannerPresence & { refresh: () => void } 
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlight = useRef(false);
 
+  const update = useCallback((next: ScannerPresence) => {
+    setPresence((current) => (samePresence(current, next) ? current : next));
+  }, []);
+
   const clearTimer = useCallback(() => {
     if (timer.current) {
       clearTimeout(timer.current);
@@ -58,18 +72,22 @@ export function useScannerPresence(): ScannerPresence & { refresh: () => void } 
   const check = useCallback(async () => {
     if (!SCANNER_LINK_SUPPORTED || inFlight.current) return;
     inFlight.current = true;
-    if (mounted.current) setPresence((current) => ({ ...current, checking: true }));
+    if (mounted.current) {
+      setPresence((current) =>
+        current.checking || current.reachable ? current : { ...current, checking: true },
+      );
+    }
 
     let nextDelay = POLL_MS;
     try {
       const online = await readConnectedScannerCount();
       if (mounted.current) {
-        setPresence({ supported: true, reachable: true, online, checking: false, error: null });
+        update({ supported: true, reachable: true, online, checking: false, error: null });
       }
     } catch (caught) {
       nextDelay = RETRY_MS;
       if (mounted.current) {
-        setPresence({
+        update({
           supported: true,
           reachable: false,
           online: 0,
@@ -84,7 +102,7 @@ export function useScannerPresence(): ScannerPresence & { refresh: () => void } 
         timer.current = setTimeout(() => void check(), nextDelay);
       }
     }
-  }, [clearTimer]);
+  }, [clearTimer, update]);
 
   useEffect(() => {
     mounted.current = true;

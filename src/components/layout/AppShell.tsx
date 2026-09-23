@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { memo, useCallback, useDeferredValue, useState } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
 
 import { useSnackbar } from '@/components/common/Snackbar';
@@ -47,6 +47,9 @@ export function AppShell() {
   const [staffModal, setStaffModal] = useState<StaffModalState>(null);
   const [enrollment, setEnrollment] = useState<EnrollmentState>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  const shownTab = useDeferredValue(tab);
+  const showLogs = useCallback(() => setTab('logs'), []);
 
   const toggleSidebar = useCallback(() => setSidebarCollapsed((current) => !current), []);
 
@@ -251,12 +254,13 @@ export function AppShell() {
 
       <BlurTargetSurface>
         <View style={styles.content}>
-          {tab === 'home' ? <HomeScreen onViewLogs={() => setTab('logs')} /> : null}
-          {tab === 'logs' ? <LogsScreen /> : null}
-          {tab === 'staff' ? (
-            <StaffScreen onCreate={openCreate} onEdit={openEdit} onReenrol={openReenrol} />
-          ) : null}
-          {tab === 'me' ? <MeScreen /> : null}
+          <SectionContent
+            tab={shownTab}
+            onViewLogs={showLogs}
+            onCreate={openCreate}
+            onEdit={openEdit}
+            onReenrol={openReenrol}
+          />
         </View>
       </BlurTargetSurface>
 
@@ -275,6 +279,28 @@ export function AppShell() {
     </View>
   );
 }
+
+const SectionContent = memo(function SectionContent({
+  tab,
+  onViewLogs,
+  onCreate,
+  onEdit,
+  onReenrol,
+}: {
+  tab: AdminSection;
+  onViewLogs: () => void;
+  onCreate: () => void;
+  onEdit: (member: StaffRow) => void;
+  onReenrol: (member: StaffRow) => void;
+}) {
+  if (tab === 'home') return <HomeScreen onViewLogs={onViewLogs} />;
+  if (tab === 'logs') return <LogsScreen />;
+  if (tab === 'staff') {
+    return <StaffScreen onCreate={onCreate} onEdit={onEdit} onReenrol={onReenrol} />;
+  }
+  if (tab === 'me') return <MeScreen />;
+  return null;
+});
 
 const styles = StyleSheet.create({
   root: {

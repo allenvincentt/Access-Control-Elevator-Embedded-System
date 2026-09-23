@@ -2,7 +2,7 @@ import { decode as base64ToBuffer, encode as bufferToBase64 } from 'base64-array
 import { PermissionsAndroid, Platform } from 'react-native';
 import { BleManager, State, type Device } from '@sfourdrinier/react-native-ble-plx';
 
-import { isFloorKey } from '@/constants/floors';
+import { FLOOR_KEYS, isFloorKey } from '@/constants/floors';
 import { ELEVATOR_DEVICE_KEY, ELEVATOR_DEVICE_NAME, IS_ELEVATOR_CONFIGURED } from '@/lib/env';
 import { AppError } from '@/lib/errors';
 import type { FloorKey } from '@/types/database';
@@ -146,13 +146,13 @@ function balancedObject(text: string): string | null {
  * A read can hand back something that is not valid JSON even while the link is
  * perfectly healthy, so this never assumes the bytes parse.
  *
- * The controller publishes a status of up to STATUS_MAX_BYTES (500 in the
- * sketch) but negotiates a 247-byte MTU, which leaves 244 bytes per ATT
- * transaction. Anything longer is fetched as a long read in several round trips,
- * and the sketch rewrites the characteristic from its main loop between them, so
- * the phone assembles the head of one payload onto the tail of another. The
- * splice usually lands inside a string, which is what surfaces as "JSON Parse
- * error: U+0000 thru U+001F is not allowed in string".
+ * Current firmware keeps every payload within BLE_PACKET_MAX_BYTES (180), one
+ * ATT packet. Older flashes published a status of up to 500 bytes, which is
+ * fetched as a long read in several round trips; the sketch keeps one read
+ * offset shared by every connected phone and resets it whenever the value is
+ * rewritten, so the phone assembles the head of one payload onto the tail of
+ * another. The splice usually lands inside a string, which is what surfaces as
+ * "JSON Parse error: U+0000 thru U+001F is not allowed in string".
  *
  * Trailing NUL padding is dropped and the first balanced object is recovered
  * where one survives. What cannot be read raises ELEVATOR_BAD_PAYLOAD, which
@@ -241,11 +241,10 @@ async function probeStatus(): Promise<{
 }> {
   try {
     const payload = await readStatusPayload();
-    const ride = payload.ride;
     return {
       answered: true,
       build: typeof payload.fw === 'string' && payload.fw ? payload.fw : null,
-      hasRide: typeof ride === 'object' && ride !== null,
+      hasRide: rideBlock(payload) !== null,
     };
   } catch {
     return { answered: false, build: null, hasRide: false };
@@ -272,13 +271,13 @@ export async function diagnoseLink(): Promise<LinkDiagnosis | null> {
     const status = await probeStatus();
     if (!status.answered) return null;
 
-    if (!status.hasRide) {
+    const hasBoarding = seen.includes(BOARDING_CHAR_UUID.toLowerCase());
+    if (!hasBoarding && !status.hasRide) {
       return {
         why: status.build
-          ? `The controller is running firmware ${status.build}, which does not report ride state in its status payload.`
+          ? `The controller is running firmware ${status.build}, and this phone found no boarding characteristic on it.`
           : 'The controller answers over Bluetooth but reports no firmware build, so it is running a flash from before ride state existed.',
-        check:
-          'Flash the current firmware/elevator-system sketch to the ESP32. The door release works because it only needs the status and command characteristics, but the human detector needs the ride block the new sketch adds.',
+        check: `Flash the current firmware/elevator-system sketch to the ESP32, then reconnect. If it still fails, forget "${ELEVATOR_DEVICE_NAME}" in Bluetooth settings and restart the phone.`,
       };
     }
 
@@ -384,7 +383,11 @@ async function connect(): Promise<Device> {
   await ensurePoweredOn();
 
   const found = await scanForController();
-  const connected = await found.connect({ requestMTU: 247, timeout: CONNECT_TIMEOUT_MS });
+  const connected = await found.connect({
+    requestMTU: 247,
+    timeout: CONNECT_TIMEOUT_MS,
+    ...(Platform.OS === 'android' ? { refreshGatt: 'OnConnected' as const } : {}),
+  });
   await connected.discoverAllServicesAndCharacteristics();
 
   connected.onDisconnected(() => {
@@ -432,7 +435,22 @@ function settled(ok: boolean, error: string): boolean {
   return ok || error !== 'none';
 }
 
+function findCompactAck(entries: unknown[], cmdId: string): ResolvedAck | null {
+  for (const entry of entries) {
+    if (typeof entry !== 'string') continue;
+    const mark = entry.indexOf('!');
+    const id = mark < 0 ? entry : entry.slice(0, mark);
+    if (id !== cmdId) continue;
+    const ok = mark < 0;
+    const error = ok ? 'none' : entry.slice(mark + 1) || 'none';
+    if (settled(ok, error)) return { ok, error };
+  }
+  return null;
+}
+
 function findAck(status: Record<string, unknown>, cmdId: string): ResolvedAck | null {
+  if (Array.isArray(status.ak)) return findCompactAck(status.ak, cmdId);
+
   const table = Array.isArray(status.acks) ? status.acks : [];
   for (const row of table) {
     if (typeof row !== 'object' || row === null) continue;
@@ -563,30 +581,41 @@ async function sendCommand(command: Record<string, unknown>): Promise<Record<str
   throw await unacknowledged(cmdId);
 }
 
+function pick(payload: Record<string, unknown>, compact: string, legacy: string): unknown {
+  return compact in payload ? payload[compact] : payload[legacy];
+}
+
 function readStateValue(value: unknown): ElevatorState {
-  return value === 'door_open' || value === 'traveling' ? value : 'idle';
+  if (value === 'door_open' || value === 'd') return 'door_open';
+  if (value === 'traveling' || value === 't') return 'traveling';
+  return 'idle';
 }
 
 function readSessionResult(value: unknown): ElevatorSessionResult {
-  return value === 'arrived' || value === 'timeout' || value === 'cancelled' ? value : 'none';
+  if (value === 'arrived' || value === 'a') return 'arrived';
+  if (value === 'timeout' || value === 't') return 'timeout';
+  if (value === 'cancelled' || value === 'c') return 'cancelled';
+  return 'none';
 }
 
 function readFloor(value: unknown): FloorKey | null {
+  if (typeof value === 'number') return FLOOR_KEYS[value] ?? null;
   return typeof value === 'string' && isFloorKey(value) ? value : null;
 }
 
 function parseStatus(payload: Record<string, unknown>): ElevatorStatus {
-  const remaining = Number(payload.remaining_ms);
-  const clients = Number(payload.clients);
-  const deniedSeq = Number(payload.denied_seq);
+  const remaining = Number(pick(payload, 'rm', 'remaining_ms'));
+  const clients = Number(pick(payload, 'cl', 'clients'));
+  const deniedSeq = Number(pick(payload, 'ds', 'denied_seq'));
+  const door = pick(payload, 'do', 'door_open');
   return {
-    state: readStateValue(payload.state),
-    doorOpen: payload.door_open === true,
-    currentFloor: readFloor(payload.current_floor),
-    selectedFloor: readFloor(payload.selected_floor),
-    sessionResult: readSessionResult(payload.session_result),
+    state: readStateValue(pick(payload, 'st', 'state')),
+    doorOpen: door === true || door === 1,
+    currentFloor: readFloor(pick(payload, 'cf', 'current_floor')),
+    selectedFloor: readFloor(pick(payload, 'sf', 'selected_floor')),
+    sessionResult: readSessionResult(pick(payload, 'sr', 'session_result')),
     remainingMs: Number.isFinite(remaining) ? Math.max(0, remaining) : 0,
-    deniedFloor: readFloor(payload.denied_floor),
+    deniedFloor: readFloor(pick(payload, 'df', 'denied_floor')),
     // Firmware before this build omits "denied_seq"; treat that as "no denials yet".
     deniedSeq: Number.isFinite(deniedSeq) ? Math.max(0, Math.trunc(deniedSeq)) : 0,
     // Firmware before the multi-client build omits "clients"; treat that as
@@ -682,14 +711,20 @@ async function readBoardingFromChar(): Promise<BoardingStatus> {
   }
 }
 
+function rideBlock(status: Record<string, unknown>): Record<string, unknown> | null {
+  const ride = status.ride;
+  return typeof ride === 'object' && ride !== null ? (ride as Record<string, unknown>) : null;
+}
+
 export async function readBoardingStatus(): Promise<BoardingStatus> {
   assertConfigured();
-  const status = await readStatusPayload();
-  const ride = status.ride;
-  if (typeof ride === 'object' && ride !== null) {
-    return parseBoarding(ride as Record<string, unknown>);
+  try {
+    return await readBoardingFromChar();
+  } catch (error) {
+    const ride = rideBlock(await readStatusPayload());
+    if (ride) return parseBoarding(ride);
+    throw error;
   }
-  return readBoardingFromChar();
 }
 
 export function watchBoarding(

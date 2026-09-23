@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Pressable,
   StyleSheet,
@@ -16,8 +25,10 @@ import Animated, {
 
 import {
   CountUp,
+  RevealGate,
   ScrollReveal,
   useInteraction,
+  useSettledMount,
 } from "@/components/common/animations";
 import { Skeleton } from "@/components/common/SkeletonLoader";
 import { HintRow } from "@/components/HintRow";
@@ -27,13 +38,12 @@ import { Avatar } from "@/components/ui/Avatar";
 import { Card } from "@/components/ui/Card";
 import {
   BarChart,
-  BarMeter,
   DonutChart,
   type BarChartDatum,
 } from "@/components/ui/charts";
 import { Chip } from "@/components/ui/Chip";
 import { Icon, type IconName } from "@/components/ui/Icon";
-import { floorShortLabel } from "@/constants/floors";
+import { FLOOR_KEYS, floorShortLabel } from "@/constants/floors";
 import {
   colors,
   fontFamily,
@@ -55,6 +65,8 @@ import {
 } from "@/services/dashboardService";
 import type {
   ActivityEntry,
+  DenialReason,
+  FloorKey,
   HomeOverview,
   HomeOverviewDay,
 } from "@/types/database";
@@ -414,6 +426,12 @@ export function HomeScreen({ onViewLogs }: HomeScreenProps) {
 
   const { width: windowWidth } = useWindowDimensions();
   const [measured, setMeasured] = useState(0);
+  const revealed = useSettledMount(overview != null);
+  const viewLogsRef = useRef(onViewLogs);
+  useLayoutEffect(() => {
+    viewLogsRef.current = onViewLogs;
+  }, [onViewLogs]);
+  const handleViewLogs = useCallback(() => viewLogsRef.current?.(), []);
 
   const handleLayout = useCallback((event: LayoutChangeEvent) => {
     const next = Math.round(event.nativeEvent.layout.width);
@@ -467,68 +485,100 @@ export function HomeScreen({ onViewLogs }: HomeScreenProps) {
         {loading && !overview ? (
           <LoadingState columns={kpiColumns} itemWidth={kpiWidth} wide={wide} />
         ) : overview ? (
-          <>
-            <KpiGrid
+          <RevealGate open={revealed}>
+            <Dashboard
               overview={overview}
               insights={insights}
-              itemWidth={kpiWidth}
-              columns={kpiColumns}
+              kpiColumns={kpiColumns}
+              kpiWidth={kpiWidth}
+              desktop={desktop}
+              wide={wide}
+              onViewLogs={onViewLogs ? handleViewLogs : undefined}
             />
-
-            <View style={[styles.row, !desktop && styles.rowStacked]}>
-              <AccessAttemptsPanel
-                overview={overview}
-                insights={insights}
-                height={desktop ? 230 : 200}
-                style={desktop ? styles.flexWide : styles.full}
-              />
-
-              <View
-                style={[
-                  styles.row,
-                  desktop ? styles.flexPair : styles.full,
-                  !wide && styles.rowStacked,
-                ]}
-              >
-                <GrantedVsDeniedPanel
-                  overview={overview}
-                  style={wide ? styles.flexEqual : styles.full}
-                />
-                <DenialReasonsPanel
-                  overview={overview}
-                  style={wide ? styles.flexEqual : styles.full}
-                />
-              </View>
-            </View>
-
-            <View
-              style={[
-                styles.row,
-                !wide && styles.rowStacked,
-                wide && !desktop && styles.rowWrap,
-              ]}
-            >
-              <BusiestFloorsPanel
-                overview={overview}
-                style={wide ? styles.flexNarrow : styles.full}
-              />
-              <MostActivePanel
-                insights={insights}
-                style={wide ? styles.flexNarrow : styles.full}
-              />
-              <RecentActivityPanel
-                overview={overview}
-                compact={!wide}
-                onViewLogs={onViewLogs}
-                style={desktop ? styles.flexWide : styles.full}
-              />
-            </View>
-          </>
+          </RevealGate>
         ) : null}
       </View>
     </Screen>
   );
 }
+
+const Dashboard = memo(function Dashboard({
+  overview,
+  insights,
+  kpiColumns,
+  kpiWidth,
+  desktop,
+  wide,
+  onViewLogs,
+}: {
+  overview: HomeOverview;
+  insights: HomeInsights | null;
+  kpiColumns: number;
+  kpiWidth: number;
+  desktop: boolean;
+  wide: boolean;
+  onViewLogs?: () => void;
+}) {
+  return (
+    <>
+      <KpiGrid
+        overview={overview}
+        insights={insights}
+        itemWidth={kpiWidth}
+        columns={kpiColumns}
+      />
+
+      <View style={[styles.row, !desktop && styles.rowStacked]}>
+        <AccessAttemptsPanel
+          overview={overview}
+          insights={insights}
+          height={desktop ? 230 : 200}
+          style={desktop ? styles.flexWide : styles.full}
+        />
+
+        <View
+          style={[
+            styles.row,
+            desktop ? styles.flexPair : styles.full,
+            !wide && styles.rowStacked,
+          ]}
+        >
+          <GrantedVsDeniedPanel
+            overview={overview}
+            style={wide ? styles.flexEqual : styles.full}
+          />
+          <DenialReasonsPanel
+            overview={overview}
+            style={wide ? styles.flexEqual : styles.full}
+          />
+        </View>
+      </View>
+
+      <View
+        style={[
+          styles.row,
+          !wide && styles.rowStacked,
+          wide && !desktop && styles.rowWrap,
+        ]}
+      >
+        <BusiestFloorsPanel
+          overview={overview}
+          style={wide ? styles.flexNarrow : styles.full}
+        />
+        <MostActivePanel
+          insights={insights}
+          style={wide ? styles.flexNarrow : styles.full}
+        />
+        <RecentActivityPanel
+          overview={overview}
+          compact={!wide}
+          onViewLogs={onViewLogs}
+          style={desktop ? styles.flexWide : styles.full}
+        />
+      </View>
+    </>
+  );
+});
 
 /* ----------------------------------------------------------- sections ---- */
 
@@ -736,8 +786,9 @@ function KpiGrid({
     : null;
 
   const item = { width: itemWidth };
-  // A card left alone on the last row reads as a gap; let it span instead.
-  const lastItem = KPI_COUNT % columns === 1 ? styles.full : item;
+  const leadSpans = columns === 2;
+  const firstItem = leadSpans ? styles.full : item;
+  const lastItem = !leadSpans && KPI_COUNT % columns === 1 ? styles.full : item;
 
   return (
     <View style={styles.kpiGrid}>
@@ -747,7 +798,7 @@ function KpiGrid({
         tone="brand"
         featured
         delay={0}
-        style={item}
+        style={firstItem}
         accessibilityLabel={`${overview.attempts_today} access attempts today`}
         value={
           <CountUp
@@ -876,55 +927,169 @@ function GrantedVsDeniedPanel({
 }) {
   const total = overview.granted_7d + overview.denied_7d;
   const rate = percent(overview.granted_7d, total);
+  const days = overview.days;
+  const [focus, setFocus] = useState<number | null>(null);
+  const shownIndex = focus ?? days.length - 1;
+  const shown = days[shownIndex];
+  const dayPeak = Math.max(1, ...days.map((day) => day.granted + day.denied));
 
   return (
-    <Panel title="Granted vs Denied" delay={250} style={style}>
+    <Panel
+      title="Granted vs Denied"
+      subtitle="Last 7 days"
+      delay={250}
+      style={style}
+    >
       {total === 0 ? (
         <EmptyNote>No verification activity in the last 7 days.</EmptyNote>
       ) : (
-        <View style={styles.donutWrap}>
-          <DonutChart
-            value={total > 0 ? overview.granted_7d / total : 0}
-            size={168}
-            thickness={20}
-            color={colors.success}
-            trackColor={colors.danger}
-            animationDelay={250}
-            accessibilityLabel={`${rate.toFixed(1)} percent of attempts granted in the last 7 days`}
-          >
-            <CountUp
-              value={rate}
-              decimals={1}
-              suffix="%"
-              delay={250}
-              style={styles.donutValue}
-            />
-            <Text style={styles.donutCaption}>granted</Text>
-          </DonutChart>
+        <View style={styles.splitWrap}>
+          <View style={styles.splitTop}>
+            <DonutChart
+              value={overview.granted_7d / total}
+              size={136}
+              thickness={14}
+              gap={6}
+              color={colors.success}
+              trackColor={colors.danger}
+              animationDelay={250}
+              accessibilityLabel={`${rate.toFixed(1)} percent of attempts granted in the last 7 days`}
+            >
+              <CountUp
+                value={rate}
+                decimals={0}
+                suffix="%"
+                delay={250}
+                style={styles.donutValue}
+              />
+              <Text style={styles.donutCaption}>granted</Text>
+            </DonutChart>
 
-          <View style={styles.legend}>
-            <View style={styles.legendItem}>
-              <View
-                style={[styles.legendDot, { backgroundColor: colors.success }]}
+            <View style={styles.splitStats}>
+              <SplitStat
+                tone="success"
+                label="Granted"
+                value={overview.granted_7d}
+                share={rate}
               />
-              <Text
-                style={styles.legendLabel}
-              >{`Granted (${overview.granted_7d})`}</Text>
-            </View>
-            <View style={styles.legendItem}>
-              <View
-                style={[styles.legendDot, { backgroundColor: colors.danger }]}
+              <SplitStat
+                tone="danger"
+                label="Denied"
+                value={overview.denied_7d}
+                share={100 - rate}
               />
-              <Text
-                style={styles.legendLabel}
-              >{`Denied (${overview.denied_7d})`}</Text>
             </View>
+          </View>
+
+          <View style={styles.dailyWrap}>
+            <View style={styles.dailyStrip}>
+              {days.map((day, index) => {
+                const dayTotal = day.granted + day.denied;
+                const active = index === shownIndex;
+                return (
+                  <Pressable
+                    key={day.day}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${day.weekday}: ${day.granted} granted, ${day.denied} denied`}
+                    accessibilityState={{ selected: active }}
+                    onHoverIn={() => setFocus(index)}
+                    onHoverOut={() =>
+                      setFocus((current) => (current === index ? null : current))
+                    }
+                    onPress={() => setFocus(index)}
+                    style={styles.dailyColumn}
+                  >
+                    <View
+                      style={[
+                        styles.dailyBar,
+                        active && styles.dailyBarActive,
+                      ]}
+                    >
+                      {dayTotal === 0 ? null : (
+                        <>
+                          <View
+                            style={[
+                              styles.dailyGranted,
+                              { flexGrow: day.granted, opacity: active ? 1 : 0.55 },
+                            ]}
+                          />
+                          <View
+                            style={[
+                              styles.dailyDenied,
+                              { flexGrow: day.denied, opacity: active ? 1 : 0.55 },
+                            ]}
+                          />
+                        </>
+                      )}
+                      <View style={{ flexGrow: dayPeak - dayTotal }} />
+                    </View>
+                    <Text
+                      style={[styles.dailyLabel, active && styles.dailyLabelActive]}
+                      numberOfLines={1}
+                    >
+                      {day.weekday.slice(0, 1)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            {shown ? (
+              <Text style={styles.dailyReadout} numberOfLines={1}>
+                <Text style={styles.dailyReadoutDay}>{`${shown.weekday}  `}</Text>
+                <Text style={{ color: colors.success }}>{`${shown.granted} granted`}</Text>
+                {"  ·  "}
+                <Text style={{ color: colors.danger }}>{`${shown.denied} denied`}</Text>
+              </Text>
+            ) : null}
           </View>
         </View>
       )}
     </Panel>
   );
 }
+
+function SplitStat({
+  tone,
+  label,
+  value,
+  share,
+}: {
+  tone: "success" | "danger";
+  label: string;
+  value: number;
+  share: number;
+}) {
+  const meta = TONE[tone];
+  return (
+    <View style={[styles.splitStat, { backgroundColor: meta.tint }]}>
+      <View style={styles.splitStatHead}>
+        <View style={[styles.legendDot, { backgroundColor: meta.fg }]} />
+        <Text style={styles.splitStatLabel}>{label}</Text>
+      </View>
+      <View style={styles.splitStatRow}>
+        <CountUp value={value} delay={250} style={styles.splitStatValue} />
+        <Text style={[styles.splitStatShare, { color: meta.fg }]}>
+          {`${share.toFixed(0)}%`}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+const DENIAL_ICONS: Record<DenialReason, IconName> = {
+  UnknownCompanyId: "badge",
+  Suspended: "lock",
+  FloorNotAuthorized: "floors",
+  NoFaceEnrolled: "face",
+  FaceMismatch: "face",
+  LowQuality: "camera",
+  SessionExpired: "time",
+  TooManyAttempts: "lock",
+  RateLimited: "time",
+  TerminalNotConfigured: "settings",
+  NotAuthorized: "shield",
+  InvalidInput: "error",
+};
 
 function DenialReasonsPanel({
   overview,
@@ -934,28 +1099,27 @@ function DenialReasonsPanel({
   style?: StyleProp<ViewStyle>;
 }) {
   const reasons = overview.denial_reasons;
-  const peak =
-    reasons.length > 0 ? Math.max(...reasons.map((entry) => entry.count)) : 0;
+  const total = reasons.reduce((sum, entry) => sum + entry.count, 0);
 
   return (
     <Panel
       title="Denial Reasons"
-      subtitle="Last 7 days"
+      subtitle={`Last 7 days · ${total} ${total === 1 ? "denial" : "denials"}`}
       delay={320}
       style={style}
     >
       {reasons.length === 0 ? (
         <EmptyNote>No denials in the last 7 days.</EmptyNote>
       ) : (
-        <View style={styles.meterList}>
+        <View style={styles.reasonGrid}>
           {reasons.map((entry, index) => (
-            <BarMeter
+            <ReasonTile
               key={entry.reason}
-              label={DENIAL_LABELS[entry.reason]}
-              value={entry.count}
-              ratio={peak > 0 ? entry.count / peak : 0}
-              color={colors.danger}
-              animationDelay={320 + index * 70}
+              reason={entry.reason}
+              count={entry.count}
+              share={percent(entry.count, total)}
+              lead={index === 0}
+              delay={320 + index * 60}
             />
           ))}
         </View>
@@ -964,6 +1128,58 @@ function DenialReasonsPanel({
   );
 }
 
+function ReasonTile({
+  reason,
+  count,
+  share,
+  lead,
+  delay,
+}: {
+  reason: DenialReason;
+  count: number;
+  share: number;
+  lead: boolean;
+  delay: number;
+}) {
+  const { animatedStyle, handlers } = useInteraction({
+    hoverLift: 3,
+    pressScale: 1,
+  });
+
+  return (
+    <Animated.View
+      onPointerEnter={handlers.onHoverIn}
+      onPointerLeave={handlers.onHoverOut}
+      accessibilityRole="summary"
+      accessibilityLabel={`${DENIAL_LABELS[reason]}: ${count}, ${share.toFixed(0)} percent of denials`}
+      style={[styles.reasonTile, lead && styles.reasonTileLead, animatedStyle]}
+    >
+      <View style={styles.reasonTop}>
+        <View style={[styles.reasonIcon, lead && styles.reasonIconLead]}>
+          <Icon
+            name={DENIAL_ICONS[reason] ?? "warning"}
+            size={16}
+            color={lead ? colors.onPrimary : colors.danger}
+          />
+        </View>
+        <Text style={[styles.reasonShare, lead && styles.reasonShareLead]}>
+          {`${share.toFixed(0)}%`}
+        </Text>
+      </View>
+      <CountUp value={count} delay={delay} style={styles.reasonCount} />
+      <Text style={styles.reasonLabel} numberOfLines={2}>
+        {DENIAL_LABELS[reason]}
+      </Text>
+    </Animated.View>
+  );
+}
+
+const FLOOR_BUTTON: Record<FloorKey, string> = {
+  FirstFloor: "L",
+  SecondFloor: "2",
+  ThirdFloor: "3",
+};
+
 function BusiestFloorsPanel({
   overview,
   style,
@@ -971,9 +1187,15 @@ function BusiestFloorsPanel({
   overview: HomeOverview;
   style?: StyleProp<ViewStyle>;
 }) {
-  const floors = overview.busiest_floors;
-  const peak =
-    floors.length > 0 ? Math.max(...floors.map((entry) => entry.count)) : 0;
+  const counts = new Map(
+    overview.busiest_floors.map((entry) => [entry.floor, entry.count]),
+  );
+  const total = overview.busiest_floors.reduce(
+    (sum, entry) => sum + entry.count,
+    0,
+  );
+  const peak = Math.max(0, ...overview.busiest_floors.map((entry) => entry.count));
+  const floors = [...FLOOR_KEYS].reverse();
 
   return (
     <Panel
@@ -982,20 +1204,54 @@ function BusiestFloorsPanel({
       delay={380}
       style={style}
     >
-      {floors.length === 0 ? (
+      {total === 0 ? (
         <EmptyNote>No floor releases yet today.</EmptyNote>
       ) : (
-        <View style={styles.meterList}>
-          {floors.map((entry, index) => (
-            <BarMeter
-              key={entry.floor}
-              label={floorShortLabel(entry.floor)}
-              value={entry.count}
-              ratio={peak > 0 ? entry.count / peak : 0}
-              color={colors.secondary}
-              animationDelay={380 + index * 70}
-            />
-          ))}
+        <View style={styles.shaft}>
+          <View pointerEvents="none" style={styles.shaftLine} />
+          {floors.map((floor) => {
+            const count = counts.get(floor) ?? 0;
+            const lit = count > 0 && count === peak;
+            return (
+              <View
+                key={floor}
+                style={styles.floorStop}
+                accessibilityLabel={`${floorShortLabel(floor)}: ${count} ${count === 1 ? "entry" : "entries"}${lit ? ", busiest" : ""}`}
+              >
+                <View
+                  style={[
+                    styles.floorButton,
+                    lit && styles.floorButtonLit,
+                    count === 0 && styles.floorButtonIdle,
+                  ]}
+                >
+                  {lit ? (
+                    <View
+                      pointerEvents="none"
+                      style={[styles.floorButtonFill, gradient("base")]}
+                    />
+                  ) : null}
+                  <Text
+                    style={[
+                      styles.floorButtonText,
+                      lit && styles.floorButtonTextLit,
+                    ]}
+                  >
+                    {FLOOR_BUTTON[floor]}
+                  </Text>
+                </View>
+                <View style={styles.floorBody}>
+                  <Text style={styles.floorName} numberOfLines={1}>
+                    {floorShortLabel(floor)}
+                  </Text>
+                  <Text style={styles.floorMeta} numberOfLines={1}>
+                    {`${count} ${count === 1 ? "entry" : "entries"} · ${percent(count, total).toFixed(0)}%`}
+                  </Text>
+                </View>
+                {lit ? <Chip label="Busiest" tone="brand" size="sm" /> : null}
+              </View>
+            );
+          })}
         </View>
       )}
     </Panel>
@@ -1010,7 +1266,7 @@ function MostActivePanel({
   style?: StyleProp<ViewStyle>;
 }) {
   const staff = insights?.mostActive ?? [];
-  const peak = staff.length > 0 ? staff[0].attempts : 0;
+  const [leader, ...rest] = staff;
 
   return (
     <Panel
@@ -1021,26 +1277,72 @@ function MostActivePanel({
     >
       {!insights ? (
         <EmptyNote>Staff activity could not be loaded.</EmptyNote>
-      ) : staff.length === 0 ? (
+      ) : !leader ? (
         <EmptyNote>No staff badge scans in the last 7 days.</EmptyNote>
       ) : (
-        <View style={styles.meterList}>
-          {staff.map((member, index) => (
-            <View key={member.staffId} style={styles.activeRow}>
+        <View style={styles.board}>
+          <View
+            style={styles.leader}
+            accessibilityLabel={`Most active: ${leader.name}, ${attemptsLabel(leader.attempts)}`}
+          >
+            <View
+              pointerEvents="none"
+              style={[styles.leaderFill, gradient("base")]}
+            />
+            <View style={styles.leaderAvatar}>
+              <Avatar
+                name={leader.name}
+                imageUri={leader.photoUrl}
+                size={48}
+                tone="gold"
+              />
+              <View style={styles.leaderRank}>
+                <Text style={styles.leaderRankText}>1</Text>
+              </View>
+            </View>
+            <View style={styles.leaderBody}>
+              <Text style={styles.leaderName} numberOfLines={1}>
+                {leader.name}
+              </Text>
+              <Text style={styles.leaderMeta} numberOfLines={1}>
+                {leader.companyId}
+              </Text>
+            </View>
+            <View style={styles.leaderScore}>
+              <CountUp
+                value={leader.attempts}
+                delay={410}
+                style={styles.leaderCount}
+              />
+              <Text style={styles.leaderUnit}>
+                {leader.attempts === 1 ? "attempt" : "attempts"}
+              </Text>
+            </View>
+          </View>
+
+          {rest.map((member, index) => (
+            <View
+              key={member.staffId}
+              style={styles.rankRow}
+              accessibilityLabel={`Rank ${index + 2}: ${member.name}, ${attemptsLabel(member.attempts)}`}
+            >
+              <Text style={styles.rankNumber}>{index + 2}</Text>
               <Avatar
                 name={member.name}
-                imageUri={member.photoUrl ?? undefined}
-                size={32}
+                imageUri={member.photoUrl}
+                size={34}
                 tone="brand"
               />
-              <View style={styles.activeMeter}>
-                <BarMeter
-                  label={member.name}
-                  value={member.attempts}
-                  ratio={peak > 0 ? member.attempts / peak : 0}
-                  color={colors.primary}
-                  animationDelay={410 + index * 70}
-                />
+              <View style={styles.rankBody}>
+                <Text style={styles.rankName} numberOfLines={1}>
+                  {member.name}
+                </Text>
+                <Text style={styles.rankMeta} numberOfLines={1}>
+                  {member.companyId}
+                </Text>
+              </View>
+              <View style={styles.rankPill}>
+                <Text style={styles.rankPillText}>{member.attempts}</Text>
               </View>
             </View>
           ))}
@@ -1341,12 +1643,15 @@ const styles = StyleSheet.create({
 
   panelHeader: {
     flexDirection: "row",
+    flexWrap: "wrap",
     alignItems: "flex-start",
     gap: spacing.md,
     marginBottom: spacing.base,
   },
   panelHeading: {
-    flex: 1,
+    flexGrow: 1,
+    flexShrink: 1,
+    flexBasis: 180,
     gap: 2,
     minWidth: 0,
   },
@@ -1378,16 +1683,117 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     ...typography.caption,
   },
-  legend: {
+  splitWrap: {
+    gap: spacing.base,
+  },
+  splitTop: {
     flexDirection: "row",
     flexWrap: "wrap",
+    alignItems: "center",
     justifyContent: "center",
     gap: spacing.base,
   },
-  legendItem: {
+  splitStats: {
+    flexGrow: 1,
+    flexBasis: 120,
+    gap: spacing.sm,
+  },
+  splitStat: {
+    gap: 2,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+  },
+  splitStatHead: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
+  },
+  splitStatLabel: {
+    color: colors.textSecondary,
+    ...typography.caption,
+    fontFamily: fontFamily.bold,
+    fontWeight: "700",
+  },
+  splitStatRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: spacing.sm,
+  },
+  splitStatValue: {
+    color: colors.text,
+    ...typography.title,
+    fontVariant: ["tabular-nums"],
+  },
+  splitStatShare: {
+    ...typography.caption,
+    fontFamily: fontFamily.bold,
+    fontWeight: "700",
+    fontVariant: ["tabular-nums"],
+  },
+  dailyWrap: {
+    gap: spacing.sm,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  dailyStrip: {
+    flexDirection: "row",
+    gap: 6,
+  },
+  dailyColumn: {
+    flex: 1,
+    alignItems: "center",
+    gap: 4,
+  },
+  dailyBar: {
+    width: "100%",
+    maxWidth: 22,
+    height: 56,
+    flexDirection: "column-reverse",
+    gap: 2,
+    padding: 2,
+    borderRadius: 8,
+    backgroundColor: colors.surfaceSunken,
+    overflow: "hidden",
+  },
+  dailyBarActive: {
+    backgroundColor: colors.surfaceAlt,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    padding: 1,
+  },
+  dailyGranted: {
+    flexBasis: 0,
+    borderRadius: 5,
+    backgroundColor: colors.success,
+  },
+  dailyDenied: {
+    flexBasis: 0,
+    borderRadius: 5,
+    backgroundColor: colors.danger,
+  },
+  dailyLabel: {
+    color: colors.textMuted,
+    ...typography.caption,
+    fontSize: 11,
+  },
+  dailyLabelActive: {
+    color: colors.text,
+    fontFamily: fontFamily.bold,
+    fontWeight: "700",
+  },
+  dailyReadout: {
+    color: colors.textSecondary,
+    ...typography.caption,
+    textAlign: "center",
+    fontVariant: ["tabular-nums"],
+  },
+  dailyReadoutDay: {
+    color: colors.text,
+    fontFamily: fontFamily.bold,
+    fontWeight: "700",
   },
   legendDot: {
     width: 8,
@@ -1425,14 +1831,231 @@ const styles = StyleSheet.create({
   meterList: {
     gap: spacing.md,
   },
-  activeRow: {
+  reasonGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+  },
+  reasonTile: {
+    flexGrow: 1,
+    flexBasis: "45%",
+    minWidth: 120,
+    gap: 4,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceAlt,
+  },
+  reasonTileLead: {
+    borderColor: colors.primaryTint,
+    backgroundColor: colors.dangerTint,
+  },
+  reasonTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 2,
+  },
+  reasonIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: radius.sm,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.dangerTint,
+  },
+  reasonIconLead: {
+    backgroundColor: colors.danger,
+  },
+  reasonShare: {
+    color: colors.textMuted,
+    ...typography.caption,
+    fontFamily: fontFamily.bold,
+    fontWeight: "700",
+    fontVariant: ["tabular-nums"],
+  },
+  reasonShareLead: {
+    color: colors.danger,
+  },
+  reasonCount: {
+    color: colors.text,
+    ...typography.title,
+    fontVariant: ["tabular-nums"],
+  },
+  reasonLabel: {
+    color: colors.textSecondary,
+    ...typography.caption,
+  },
+
+  shaft: {
+    position: "relative",
+    gap: spacing.md,
+  },
+  shaftLine: {
+    position: "absolute",
+    left: 21,
+    top: 22,
+    bottom: 22,
+    width: 2,
+    borderRadius: 1,
+    backgroundColor: colors.border,
+  },
+  floorStop: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
   },
-  activeMeter: {
+  floorButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surface,
+  },
+  floorButtonLit: {
+    borderColor: colors.primaryTint,
+    ...shadow.brand,
+  },
+  floorButtonIdle: {
+    borderStyle: "dashed",
+  },
+  floorButtonFill: {
+    ...StyleSheet.absoluteFill,
+  },
+  floorButtonText: {
+    color: colors.textSecondary,
+    ...typography.subheading,
+    fontVariant: ["tabular-nums"],
+  },
+  floorButtonTextLit: {
+    color: colors.onPrimary,
+  },
+  floorBody: {
     flex: 1,
     minWidth: 0,
+    gap: 2,
+  },
+  floorName: {
+    color: colors.text,
+    ...typography.bodyStrong,
+  },
+  floorMeta: {
+    color: colors.textMuted,
+    ...typography.caption,
+    fontVariant: ["tabular-nums"],
+  },
+
+  board: {
+    gap: spacing.sm,
+  },
+  leader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    padding: spacing.md,
+    borderRadius: radius.lg,
+    overflow: "hidden",
+    marginBottom: spacing.xs,
+    ...shadow.brand,
+  },
+  leaderFill: {
+    ...StyleSheet.absoluteFill,
+  },
+  leaderAvatar: {
+    position: "relative",
+  },
+  leaderRank: {
+    position: "absolute",
+    right: -4,
+    bottom: -4,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.secondary,
+    borderWidth: 2,
+    borderColor: colors.onPrimary,
+  },
+  leaderRankText: {
+    color: colors.onSecondary,
+    fontFamily: fontFamily.bold,
+    fontWeight: "700",
+    fontSize: 10,
+  },
+  leaderBody: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  leaderName: {
+    color: colors.onPrimary,
+    ...typography.bodyStrong,
+  },
+  leaderMeta: {
+    color: "rgba(255,255,255,0.78)",
+    ...typography.caption,
+  },
+  leaderScore: {
+    alignItems: "flex-end",
+  },
+  leaderCount: {
+    color: colors.onPrimary,
+    ...typography.title,
+    fontVariant: ["tabular-nums"],
+  },
+  leaderUnit: {
+    color: "rgba(255,255,255,0.78)",
+    ...typography.caption,
+  },
+  rankRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.xs,
+  },
+  rankNumber: {
+    width: 18,
+    textAlign: "center",
+    color: colors.textMuted,
+    ...typography.label,
+    fontFamily: fontFamily.bold,
+    fontWeight: "700",
+    fontVariant: ["tabular-nums"],
+  },
+  rankBody: {
+    flex: 1,
+    minWidth: 0,
+    gap: 1,
+  },
+  rankName: {
+    color: colors.text,
+    ...typography.bodyStrong,
+  },
+  rankMeta: {
+    color: colors.textMuted,
+    ...typography.caption,
+  },
+  rankPill: {
+    minWidth: 32,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+    borderRadius: radius.pill,
+    alignItems: "center",
+    backgroundColor: colors.primaryTint,
+  },
+  rankPillText: {
+    color: colors.primary,
+    ...typography.caption,
+    fontFamily: fontFamily.bold,
+    fontWeight: "700",
+    fontVariant: ["tabular-nums"],
   },
 
   linkAction: {

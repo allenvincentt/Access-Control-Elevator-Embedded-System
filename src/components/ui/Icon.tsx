@@ -60,6 +60,7 @@ export const GLYPHS = {
   lockOpen: 'lock_open',
   time: 'schedule',
   calendar: 'calendar_today',
+  sort: 'swap_vert',
 } as const;
 
 export type IconName = keyof typeof GLYPHS;

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Platform,
   Pressable,
@@ -9,13 +9,16 @@ import {
 } from 'react-native';
 import Animated, {
   Easing,
+  cancelAnimation,
   interpolateColor,
   useAnimatedStyle,
   useSharedValue,
+  withDelay,
   withTiming,
+  type SharedValue,
 } from 'react-native-reanimated';
 
-import { useAnimatedNumber } from '@/components/common/animations';
+import { useRevealOpen } from '@/components/common/animations/RevealGate';
 import { createGradientStyle } from '@/constants/glassTheme';
 import { colors, fontFamily, palette, radius, typography } from '@/constants/themeColor';
 
@@ -45,6 +48,12 @@ const DOT_SIZE = 12;
 const MAX_BAR_WIDTH = 56;
 const MIN_BAR_HEIGHT = 10;
 const TIMING = { duration: 220, easing: Easing.out(Easing.cubic) };
+const GROW = { duration: 980, easing: Easing.out(Easing.cubic) };
+
+function grownHeight(target: number, progress: number): number {
+  'worklet';
+  return Math.max(target * progress, MIN_BAR_HEIGHT * Math.min(progress * 2, 1));
+}
 
 function niceStep(max: number): number {
   const raw = Math.max(max, 1) / (TICKS - 1);
@@ -76,7 +85,14 @@ export function BarChart({
   const [plotWidth, setPlotWidth] = useState(0);
   const [hovered, setHovered] = useState<number | null>(null);
   const [pinned, setPinned] = useState<number | null>(null);
-  const progress = useAnimatedNumber(1, { delay: animationDelay });
+  const progress = useSharedValue(0);
+  const open = useRevealOpen();
+
+  useEffect(() => {
+    if (!open) return;
+    progress.value = withDelay(animationDelay, withTiming(1, GROW));
+    return () => cancelAnimation(progress);
+  }, [open, animationDelay, progress]);
 
   const fallback = defaultIndex ?? Math.max(bars.length - 1, 0);
   const selected = hovered ?? pinned ?? fallback;
@@ -90,31 +106,77 @@ export function BarChart({
 
   const barHeight = (value: number | null) => {
     if (value == null) return 0;
-    const scaled = (value / ceiling) * plotHeight * progress;
-    return Math.max(scaled, MIN_BAR_HEIGHT * Math.min(progress * 2, 1));
+    return Math.max((value / ceiling) * plotHeight, MIN_BAR_HEIGHT);
   };
 
   const selectedBar = bars[selected];
   const selectedHeight = selectedBar ? barHeight(selectedBar.value) : 0;
 
-  const tooltipX = useSharedValue(0);
-  const tooltipY = useSharedValue(0);
+  const [bubbleWidth, setBubbleWidth] = useState(0);
+  const center = selected * columnWidth + columnWidth / 2;
+  const bubbleLeft = Math.min(
+    Math.max(center - bubbleWidth / 2, 0),
+    Math.max(plotWidth - bubbleWidth, 0),
+  );
+
+  const dotX = useSharedValue(0);
+  const bubbleX = useSharedValue(0);
+  const lift = useSharedValue(0);
   const tooltipOpacity = useSharedValue(0);
+  const glideFrom = useRef<number | null>(null);
 
   useEffect(() => {
     if (!selectedBar || columnWidth <= 0 || selectedBar.value == null) {
       tooltipOpacity.value = withTiming(0, TIMING);
       return;
     }
-    tooltipX.value = withTiming(selected * columnWidth, TIMING);
-    tooltipY.value = withTiming(selectedHeight, TIMING);
-    tooltipOpacity.value = withTiming(1, TIMING);
-  }, [selected, selectedBar, columnWidth, selectedHeight, tooltipX, tooltipY, tooltipOpacity]);
+    const glide = glideFrom.current !== null && glideFrom.current !== selected;
+    glideFrom.current = selected;
+    if (glide) {
+      dotX.value = withTiming(center - DOT_SIZE / 2, TIMING);
+      bubbleX.value = withTiming(bubbleLeft, TIMING);
+      lift.value = withTiming(selectedHeight, TIMING);
+    } else {
+      dotX.value = center - DOT_SIZE / 2;
+      bubbleX.value = bubbleLeft;
+      lift.value = selectedHeight;
+    }
+    tooltipOpacity.value = withTiming(bubbleWidth > 0 ? 1 : 0, TIMING);
+  }, [
+    selected,
+    selectedBar,
+    columnWidth,
+    center,
+    bubbleLeft,
+    bubbleWidth,
+    selectedHeight,
+    dotX,
+    bubbleX,
+    lift,
+    tooltipOpacity,
+  ]);
 
-  const tooltipStyle = useAnimatedStyle(() => ({
+  const dotStyle = useAnimatedStyle(() => ({
     opacity: tooltipOpacity.value,
-    transform: [{ translateX: tooltipX.value }, { translateY: -tooltipY.value }],
+    transform: [
+      { translateX: dotX.value },
+      { translateY: -grownHeight(lift.value, progress.value) },
+    ],
   }));
+  const bubbleStyle = useAnimatedStyle(() => ({
+    opacity: tooltipOpacity.value,
+    transform: [
+      { translateX: bubbleX.value },
+      { translateY: -grownHeight(lift.value, progress.value) },
+    ],
+  }));
+
+  const handleBubbleLayout = (event: LayoutChangeEvent) => {
+    const next = Math.ceil(event.nativeEvent.layout.width);
+    setBubbleWidth((current) => (current === next ? current : next));
+  };
+
+  const baseline = height - TOOLTIP_SPACE - plotHeight;
 
   const handleLayout = (event: LayoutChangeEvent) => {
     const next = Math.round(event.nativeEvent.layout.width);
@@ -172,6 +234,7 @@ export function BarChart({
                   empty={bar.value == null}
                   width={barWidth}
                   height={bar.value == null ? barWidth : barHeight(bar.value)}
+                  progress={progress}
                   color={color}
                   tint={tint}
                   stripe={stripe}
@@ -181,23 +244,31 @@ export function BarChart({
           </View>
 
           {columnWidth > 0 ? (
-            <Animated.View
-              pointerEvents="none"
-              style={[
-                styles.tooltipTrack,
-                { width: columnWidth, bottom: height - TOOLTIP_SPACE - plotHeight - DOT_SIZE / 2 },
-                tooltipStyle,
-              ]}
-            >
-              <View style={[styles.tooltip, { backgroundColor: color }]}>
+            <>
+              <Animated.View
+                pointerEvents="none"
+                onLayout={handleBubbleLayout}
+                style={[
+                  styles.tooltip,
+                  { backgroundColor: color, bottom: baseline + DOT_SIZE / 2 + 6 },
+                  bubbleStyle,
+                ]}
+              >
                 <Text style={styles.tooltipText} numberOfLines={1}>
                   {selectedBar?.value != null
                     ? selectedBar.tooltip ?? formatValue(selectedBar.value)
                     : ''}
                 </Text>
-              </View>
-              <View style={[styles.dot, { borderColor: color }]} />
-            </Animated.View>
+              </Animated.View>
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.dot,
+                  { borderColor: color, bottom: baseline - DOT_SIZE / 2 },
+                  dotStyle,
+                ]}
+              />
+            </>
           ) : null}
         </View>
       </View>
@@ -226,6 +297,7 @@ function Bar({
   empty,
   width,
   height,
+  progress,
   color,
   tint,
   stripe,
@@ -234,6 +306,7 @@ function Bar({
   empty: boolean;
   width: number;
   height: number;
+  progress: SharedValue<number>;
   color: string;
   tint: string;
   stripe: string;
@@ -244,6 +317,9 @@ function Bar({
     emphasis.value = withTiming(active && !empty ? 1 : 0, TIMING);
   }, [active, empty, emphasis]);
 
+  const growStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: height - grownHeight(height, progress.value) }],
+  }));
   const fillStyle = useAnimatedStyle(() => ({
     backgroundColor: interpolateColor(emphasis.value, [0, 1], [tint, color]),
   }));
@@ -261,19 +337,23 @@ function Bar({
     );
   }
 
+  const shape = { width, height, borderRadius: width / 2 };
+
   return (
-    <Animated.View style={[styles.bar, { width, height, borderRadius: width / 2 }, fillStyle]}>
-      <Animated.View
-        pointerEvents="none"
-        style={[
-          StyleSheet.absoluteFill,
-          createGradientStyle(
-            `repeating-linear-gradient(135deg, ${stripe} 0px, ${stripe} 2px, transparent 2px, transparent 7px)`,
-          ),
-          stripeStyle,
-        ]}
-      />
-    </Animated.View>
+    <View style={[styles.bar, shape]}>
+      <Animated.View style={[styles.bar, shape, fillStyle, growStyle]}>
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            StyleSheet.absoluteFill,
+            createGradientStyle(
+              `repeating-linear-gradient(135deg, ${stripe} 0px, ${stripe} 2px, transparent 2px, transparent 7px)`,
+            ),
+            stripeStyle,
+          ]}
+        />
+      </Animated.View>
+    </View>
   );
 }
 
@@ -331,16 +411,12 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderStyle: 'dashed',
   },
-  tooltipTrack: {
+  tooltip: {
     position: 'absolute',
     left: 0,
-    alignItems: 'center',
-  },
-  tooltip: {
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: radius.pill,
-    marginBottom: 6,
   },
   tooltipText: {
     color: palette.white,
@@ -350,6 +426,8 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   dot: {
+    position: 'absolute',
+    left: 0,
     width: DOT_SIZE,
     height: DOT_SIZE,
     borderRadius: DOT_SIZE / 2,

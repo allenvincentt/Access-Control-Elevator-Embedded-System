@@ -576,16 +576,13 @@ function MobileNavTab({
       toValue: active ? 1 : 0,
       duration: GlassMotion.morph.duration,
       easing: GlassMotion.morph.easing,
-      useNativeDriver: false,
+      useNativeDriver: true,
     }).start();
   }, [active, activeProgress]);
 
   const rest = activeProgress.interpolate({ inputRange: [0, 1], outputRange: [1, 0] });
   const scale = interaction.press.interpolate({ inputRange: [0, 1], outputRange: [1, 0.92] });
-  const labelColor = activeProgress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [colors.textMuted, colors.primary],
-  });
+  const label = item.shortLabel ?? item.label;
 
   return (
     <Pressable
@@ -609,12 +606,24 @@ function MobileNavTab({
           </Animated.View>
         </View>
 
-        <Animated.Text
-          style={[styles.mobileTabLabel, { color: labelColor as unknown as string }]}
-          numberOfLines={1}
-          maxFontSizeMultiplier={1.1}>
-          {item.shortLabel ?? item.label}
-        </Animated.Text>
+        <View style={styles.mobileTabLabelWrap}>
+          <Animated.Text
+            style={[styles.mobileTabLabel, { color: colors.textMuted, opacity: rest }]}
+            numberOfLines={1}
+            maxFontSizeMultiplier={1.1}>
+            {label}
+          </Animated.Text>
+          <Animated.Text
+            style={[
+              styles.mobileTabLabel,
+              styles.mobileTabLabelLayer,
+              { color: colors.primary, opacity: activeProgress },
+            ]}
+            numberOfLines={1}
+            maxFontSizeMultiplier={1.1}>
+            {label}
+          </Animated.Text>
+        </View>
       </Animated.View>
     </Pressable>
   );
@@ -779,6 +788,14 @@ const styles = StyleSheet.create({
     position: 'absolute',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  mobileTabLabelWrap: {
+    alignSelf: 'stretch',
+  },
+  mobileTabLabelLayer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
   },
   mobileTabLabel: {
     fontFamily: fontFamily.semibold,
