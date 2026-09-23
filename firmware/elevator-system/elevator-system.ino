@@ -88,7 +88,7 @@ static const uint16_t SERVO_US_MAX_SAFE = 2400;
 static const uint8_t DOOR_LEFT_CLOSED_DEG = 90;
 static const uint8_t DOOR_RIGHT_CLOSED_DEG = 90;
 
-static const uint8_t DOOR_TRAVEL_DEG = 90;
+static const uint8_t DOOR_TRAVEL_DEG = 65;
 static const bool DOOR_LEFT_OPENS_CW = false;
 
 static const bool SERVO_TRIM_MODE = false;
