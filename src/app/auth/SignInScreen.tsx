@@ -17,7 +17,6 @@ import Animated, {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { HumanDetectionScreen } from "@/app/auth/scanner-screens/HumanDetectionScreen";
-import { PersonReplayScreen } from "@/app/auth/scanner-screens/PersonReplayScreen";
 import { ScannerFlow } from "@/app/auth/scanner-screens/ScannerFlow";
 import { HintRow } from "@/components/HintRow";
 import { useSnackbar } from "@/components/common/Snackbar";
@@ -40,7 +39,6 @@ import {
 import { useAuth } from "@/hooks/useAuth";
 import { useKeyboardHeight } from "@/hooks/useKeyboardHeight";
 import { errorMessage } from "@/lib/errors";
-import { PERSON_DATASET_ENABLED } from "@/services/person/dataset";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const TYPING_IDLE_MS = 900;
@@ -68,7 +66,6 @@ export function SignInScreen() {
   const [formError, setFormError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [detecting, setDetecting] = useState(false);
-  const [replaying, setReplaying] = useState(false);
   const [activeField, setActiveField] = useState<"email" | "password" | null>(
     null,
   );
@@ -189,19 +186,8 @@ export function SignInScreen() {
     return <ScannerFlow onExit={() => setScanning(false)} />;
   }
 
-  if (replaying) {
-    return <PersonReplayScreen onExit={() => setReplaying(false)} />;
-  }
-
   if (detecting) {
-    return (
-      <HumanDetectionScreen
-        onExit={() => setDetecting(false)}
-        onOpenReplay={
-          PERSON_DATASET_ENABLED ? () => setReplaying(true) : undefined
-        }
-      />
-    );
+    return <HumanDetectionScreen onExit={() => setDetecting(false)} />;
   }
 
   const heroBlock = (

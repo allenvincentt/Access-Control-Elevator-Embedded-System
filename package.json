@@ -49,12 +49,9 @@
     "react-native-worklets": "0.10.1"
   },
   "devDependencies": {
-    "@types/jest": "29.5.14",
     "@types/react": "~19.2.2",
     "eslint": "^9.0.0",
     "eslint-config-expo": "~57.0.2",
-    "jest": "~29.7.0",
-    "jest-expo": "~57.0.5",
     "typescript": "~6.0.3"
   },
   "scripts": {
@@ -65,14 +62,7 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "lint": "expo lint",
-    "test": "jest"
-  },
-  "jest": {
-    "preset": "jest-expo",
-    "modulePathIgnorePatterns": [
-      "<rootDir>/.claude/"
-    ]
+    "lint": "expo lint"
   },
   "private": true
 }
