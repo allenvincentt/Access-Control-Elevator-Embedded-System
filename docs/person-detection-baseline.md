@@ -54,9 +54,12 @@ Paste the report into **Baseline results** below whenever the baseline is re-rec
 | A child carried in arms | Carried child | ≥ 3 |
 | Someone standing right next to the camera | Near camera | ≥ 2 |
 | A wheelchair user or seated person | Seated | ≥ 2 |
+| People walking, turning or swapping places during the clip | Moving around | ≥ 4 |
 | Bags, coats or a trolley with no extra person | Bags or trolley | ≥ 3 |
 | Bright, dim and backlit lighting | Bright / Dim / Backlit | ≥ 2 each |
 | Mirror or steel wall reflections | Reflection | ≥ 2 |
+
+Tick **Moving around** only when people walk, swap places or step across the area. Shifting weight, turning a shoulder or glancing at a phone is normal and gets no tag. Keep most clips normal and record motion-heavy scenes separately, so the everyday numbers stay comparable.
 
 The demo runs with real people in a taped floor area outside the miniature car, so there is no physical door; the plan's door open/closed split does not apply.
 

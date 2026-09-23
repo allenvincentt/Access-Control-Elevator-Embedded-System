@@ -163,6 +163,7 @@ export const PERSON_CLIP_TAGS = [
   { key: 'carried-child', label: 'Carried child' },
   { key: 'near-camera', label: 'Near camera' },
   { key: 'seated', label: 'Seated' },
+  { key: 'moving', label: 'Moving around' },
   { key: 'bags', label: 'Bags or trolley' },
   { key: 'bright', label: 'Bright' },
   { key: 'dim', label: 'Dim' },
