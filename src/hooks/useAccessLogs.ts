@@ -12,12 +12,20 @@ import type { AccessDecision } from '@/types/database';
 
 export type LogDecisionFilter = AccessDecision | 'all';
 
-function mergeAttempts(current: AccessAttempt[], incoming: AccessAttempt[]): AccessAttempt[] {
-  const merged = new Map(current.map((attempt) => [attempt.key, attempt]));
-  incoming.forEach((attempt) => merged.set(attempt.key, attempt));
-  return Array.from(merged.values()).sort(
-    (a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt),
-  );
+export type LogSortOrder = 'desc' | 'asc';
+
+export type LogDateRange = { start: Date; end: Date } | null;
+
+function dayStart(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function rangeBounds(range: LogDateRange): { from: string | null; until: string | null } {
+  if (!range) return { from: null, until: null };
+  const start = dayStart(range.start);
+  const end = dayStart(range.end);
+  end.setDate(end.getDate() + 1);
+  return { from: start.toISOString(), until: end.toISOString() };
 }
 
 export function useAccessLogs() {
@@ -25,17 +33,21 @@ export function useAccessLogs() {
   const [badges, setBadges] = useState<Record<string, AttemptBadge>>({});
   const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
   const [page, setPage] = useState(0);
-  const [hasMore, setHasMore] = useState(false);
+  const [pageSize, setPageSizeState] = useState(LOGS_PAGE_SIZE);
+  const [records, setRecords] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [paging, setPaging] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [decision, setDecision] = useState<LogDecisionFilter>('all');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [dateRange, setDateRange] = useState<LogDateRange>(null);
+  const [order, setOrder] = useState<LogSortOrder>('desc');
 
   const requestId = useRef(0);
   const mounted = useRef(true);
+  const pageRef = useRef(0);
 
   useEffect(() => {
     mounted.current = true;
@@ -62,33 +74,34 @@ export function useAccessLogs() {
   }, []);
 
   const load = useCallback(
-    async (nextPage: number, mode: 'initial' | 'refresh' | 'more') => {
+    async (nextPage: number, mode: 'initial' | 'refresh' | 'page') => {
       const id = requestId.current + 1;
       requestId.current = id;
 
       if (mode === 'initial') setLoading(true);
       if (mode === 'refresh') setRefreshing(true);
-      if (mode === 'more') setLoadingMore(true);
+      if (mode === 'page') setPaging(true);
       setError(null);
 
       try {
+        const bounds = rangeBounds(dateRange);
         const result = await listAccessLogs({
           decision,
           search: debouncedSearch,
+          from: bounds.from,
+          until: bounds.until,
+          order,
           page: nextPage,
-          pageSize: LOGS_PAGE_SIZE,
+          pageSize,
         });
 
         if (!mounted.current || requestId.current !== id) return;
 
-        setAttempts((current) =>
-          mode === 'more' ? mergeAttempts(current, result.attempts) : result.attempts,
-        );
-        setBadges((current) =>
-          mode === 'more' ? { ...current, ...result.badges } : result.badges,
-        );
+        setAttempts(result.attempts);
+        setBadges(result.badges);
         setPage(result.page);
-        setHasMore(result.hasMore);
+        pageRef.current = result.page;
+        setRecords(result.total);
         void hydratePhotos(result.badges);
       } catch (caught) {
         if (mounted.current && requestId.current === id) {
@@ -98,11 +111,11 @@ export function useAccessLogs() {
         if (mounted.current && requestId.current === id) {
           setLoading(false);
           setRefreshing(false);
-          setLoadingMore(false);
+          setPaging(false);
         }
       }
     },
-    [debouncedSearch, decision, hydratePhotos],
+    [dateRange, debouncedSearch, decision, hydratePhotos, order, pageSize],
   );
 
   useEffect(() => {
@@ -116,28 +129,42 @@ export function useAccessLogs() {
     };
   }, [load]);
 
-  const refresh = useCallback(() => load(0, 'refresh'), [load]);
+  const refresh = useCallback(() => load(pageRef.current, 'refresh'), [load]);
 
-  const loadMore = useCallback(async () => {
-    if (!hasMore || loadingMore || loading) return;
-    await load(page + 1, 'more');
-  }, [hasMore, load, loading, loadingMore, page]);
+  const goToPage = useCallback(
+    (next: number) => {
+      if (next < 0 || next === pageRef.current) return;
+      void load(next, 'page');
+    },
+    [load],
+  );
+
+  const setPageSize = useCallback((size: number) => {
+    setPageSizeState(size);
+  }, []);
 
   return {
     attempts,
     badges,
     photoUrls,
     total: attempts.length,
-    hasMore,
+    records,
+    page,
+    pageSize,
     loading,
     refreshing,
-    loadingMore,
+    paging,
     error,
     decision,
     setDecision,
     search,
     setSearch,
+    dateRange,
+    setDateRange,
+    order,
+    setOrder,
     refresh,
-    loadMore,
+    goToPage,
+    setPageSize,
   };
 }

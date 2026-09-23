@@ -1,3 +1,4 @@
+import { memo } from "react";
 import {
   Pressable,
   StyleSheet,
@@ -7,14 +8,16 @@ import {
   View,
 } from "react-native";
 
+import { RevealGate, useSettledMount } from "@/components/common/animations";
 import { Skeleton } from "@/components/common/SkeletonLoader";
 import { HintRow } from "@/components/HintRow";
 import { Screen } from "@/components/layout/Screen";
 import { ScreenHeader } from "@/components/layout/ScreenHeader";
 import { Avatar } from "@/components/ui/Avatar";
-import { GeneralButton } from "@/components/ui/buttons/GeneralButton";
 import { Card } from "@/components/ui/Card";
+import { DateRangePicker } from "@/components/ui/DateRangePicker";
 import { Icon } from "@/components/ui/Icon";
+import { TablePagination } from "@/components/ui/TablePagination";
 import { floorShortLabel, staffRoleLabel } from "@/constants/floors";
 import {
   colors,
@@ -52,6 +55,8 @@ const OUTCOME_TONE: Record<
     label: "Incomplete",
   },
 };
+
+const REVEAL_LIMIT = 8;
 
 const TIME_FORMAT: Intl.DateTimeFormatOptions = {
   hour: "numeric",
@@ -188,7 +193,7 @@ function DenialReason({ attempt }: { attempt: AccessAttempt }) {
   );
 }
 
-function AttemptRow({
+const AttemptRow = memo(function AttemptRow({
   attempt,
   badge,
   photoUrl,
@@ -220,9 +225,9 @@ function AttemptRow({
       </View>
     </View>
   );
-}
+});
 
-function AttemptCard({
+const AttemptCard = memo(function AttemptCard({
   attempt,
   badge,
   photoUrl,
@@ -236,7 +241,7 @@ function AttemptCard({
   const at = new Date(attempt.occurredAt);
 
   return (
-    <Card padding="base" reveal revealDelay={Math.min(index, 8) * 50}>
+    <Card padding="base" reveal={index < REVEAL_LIMIT} revealDelay={index * 50}>
       <View style={styles.cardTop}>
         <PersonBadge
           attempt={attempt}
@@ -266,7 +271,7 @@ function AttemptCard({
       ) : null}
     </Card>
   );
-}
+});
 
 export function LogsScreen() {
   const {
@@ -274,21 +279,42 @@ export function LogsScreen() {
     badges,
     photoUrls,
     total,
+    records,
+    page,
+    pageSize,
     loading,
     refreshing,
-    loadingMore,
-    hasMore,
+    paging,
     error,
     decision,
     setDecision,
     search,
     setSearch,
+    dateRange,
+    setDateRange,
+    order,
+    setOrder,
     refresh,
-    loadMore,
+    goToPage,
+    setPageSize,
   } = useAccessLogs();
 
+  const revealed = useSettledMount(!loading);
   const { width } = useWindowDimensions();
   const wide = width >= 900;
+
+  const pagination =
+    records > 0 ? (
+      <TablePagination
+        page={page}
+        pageSize={pageSize}
+        total={records}
+        busy={paging}
+        onPageChange={goToPage}
+        onPageSizeChange={setPageSize}
+        attached={wide}
+      />
+    ) : null;
 
   const photoFor = (badge?: AttemptBadge) =>
     badge?.photoPath ? photoUrls[badge.photoPath] : undefined;
@@ -332,6 +358,25 @@ export function LogsScreen() {
         </View>
 
         <View style={styles.filterRow}>
+          <DateRangePicker value={dateRange} onChange={setDateRange} />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={
+              order === "desc"
+                ? "Sorted newest first. Switch to oldest first"
+                : "Sorted oldest first. Switch to newest first"
+            }
+            onPress={() => setOrder(order === "desc" ? "asc" : "desc")}
+            style={({ hovered }) => [
+              styles.sortButton,
+              hovered && styles.sortButtonHover,
+            ]}
+          >
+            <Icon name="sort" size={16} color={colors.textSecondary} />
+            <Text style={styles.sortLabel}>
+              {order === "desc" ? "Newest first" : "Oldest first"}
+            </Text>
+          </Pressable>
           <View style={styles.segmented}>
             {FILTERS.map((filter) => {
               const active = decision === filter.key;
@@ -392,7 +437,7 @@ export function LogsScreen() {
           </Text>
         </View>
       ) : wide ? (
-        <View style={styles.table}>
+        <View style={[styles.table, paging && styles.paging]}>
           <View style={styles.tHeader}>
             <Text style={[styles.tHeaderText, styles.colPerson]}>
               Person / Badge
@@ -417,33 +462,27 @@ export function LogsScreen() {
               />
             </View>
           ))}
+          {pagination}
         </View>
       ) : (
-        <View style={styles.list}>
-          {attempts.map((attempt, index) => (
-            <AttemptCard
-              key={attempt.key}
-              attempt={attempt}
-              index={index}
-              badge={attempt.staffId ? badges[attempt.staffId] : undefined}
-              photoUrl={photoFor(
-                attempt.staffId ? badges[attempt.staffId] : undefined,
-              )}
-            />
-          ))}
-        </View>
+        <RevealGate open={revealed}>
+          <View style={[styles.list, paging && styles.paging]}>
+            {attempts.map((attempt, index) => (
+              <AttemptCard
+                key={attempt.key}
+                attempt={attempt}
+                index={index}
+                badge={attempt.staffId ? badges[attempt.staffId] : undefined}
+                photoUrl={photoFor(
+                  attempt.staffId ? badges[attempt.staffId] : undefined,
+                )}
+              />
+            ))}
+          </View>
+        </RevealGate>
       )}
 
-      {hasMore ? (
-        <GeneralButton
-          label={loadingMore ? "Loading…" : "Load more"}
-          variant="outline"
-          fullWidth
-          loading={loadingMore}
-          disabled={loadingMore}
-          onPress={() => void loadMore()}
-        />
-      ) : null}
+      {wide ? null : pagination}
     </Screen>
   );
 }
@@ -488,6 +527,24 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: spacing.md,
   },
+  sortButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    height: 38,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.pill,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  sortButtonHover: {
+    borderColor: colors.primary,
+  },
+  sortLabel: {
+    color: colors.textSecondary,
+    ...typography.label,
+  },
   segmented: {
     flexDirection: "row",
     padding: 3,
@@ -516,6 +573,9 @@ const styles = StyleSheet.create({
   },
   list: {
     gap: spacing.md,
+  },
+  paging: {
+    opacity: 0.55,
   },
 
   person: {

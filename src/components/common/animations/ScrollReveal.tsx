@@ -9,6 +9,8 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
+import { useRevealOpen } from './RevealGate';
+
 export type ScrollRevealProps = {
   children: ReactNode;
   delay?: number;
@@ -34,12 +36,14 @@ export function ScrollReveal({
 }: ScrollRevealProps) {
   const [played, setPlayed] = useState(!enabled);
   const progress = useSharedValue(enabled ? 0 : 1);
+  const open = useRevealOpen();
 
   useEffect(() => {
     if (!enabled || played) {
       progress.value = 1;
       return;
     }
+    if (!open) return;
     progress.value = withDelay(
       delay,
       withTiming(1, { duration, easing: Easing.out(Easing.cubic) }),
@@ -49,7 +53,7 @@ export function ScrollReveal({
       clearTimeout(timeout);
       cancelAnimation(progress);
     };
-  }, [enabled, played, delay, duration, progress]);
+  }, [enabled, played, open, delay, duration, progress]);
 
   const animatedStyle = useAnimatedStyle(() => ({
     opacity: progress.value,
@@ -60,13 +64,7 @@ export function ScrollReveal({
   }));
 
   return (
-    <Animated.View
-      style={[animatedStyle, style]}
-      onLayout={onLayout}
-      needsOffscreenAlphaCompositing
-      renderToHardwareTextureAndroid
-      shouldRasterizeIOS
-    >
+    <Animated.View style={[animatedStyle, style]} onLayout={onLayout}>
       {children}
     </Animated.View>
   );

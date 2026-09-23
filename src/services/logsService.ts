@@ -12,7 +12,7 @@ import type {
 const LOG_COLUMNS =
   'id, occurred_at, stage, decision, reason, staff_id, scanned_company_id, staff_name_snapshot, floor, device_id, match_score, session_id';
 
-export const LOGS_PAGE_SIZE = 30;
+export const LOGS_PAGE_SIZE = 25;
 
 export const REDACTED_COMPANY_ID = '(redacted)';
 
@@ -46,6 +46,9 @@ export type LogFilter = {
   decision?: AccessDecision | 'all';
   stage?: AccessStage | 'all';
   search?: string;
+  from?: string | null;
+  until?: string | null;
+  order?: 'desc' | 'asc';
   page?: number;
   pageSize?: number;
 };
@@ -54,6 +57,7 @@ export type LogsResult = {
   attempts: AccessAttempt[];
   badges: Record<string, AttemptBadge>;
   page: number;
+  total: number;
   hasMore: boolean;
 };
 
@@ -96,7 +100,7 @@ function toAttempt(key: string, rows: AccessLogRow[]): AccessAttempt {
   };
 }
 
-function groupRows(rows: AccessLogRow[]): AccessAttempt[] {
+function groupRows(rows: AccessLogRow[], order: 'desc' | 'asc' = 'desc'): AccessAttempt[] {
   const buckets = new Map<string, AccessLogRow[]>();
   rows.forEach((row) => {
     const key = attemptKey(row);
@@ -105,8 +109,9 @@ function groupRows(rows: AccessLogRow[]): AccessAttempt[] {
     else buckets.set(key, [row]);
   });
 
+  const direction = order === 'asc' ? -1 : 1;
   return Array.from(buckets, ([key, bucket]) => toAttempt(key, bucket)).sort(
-    (a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt),
+    (a, b) => direction * (Date.parse(b.occurredAt) - Date.parse(a.occurredAt)),
   );
 }
 
@@ -153,8 +158,15 @@ export async function listAccessLogs(filter: LogFilter = {}): Promise<LogsResult
   let query = supabase
     .from('access_logs')
     .select(LOG_COLUMNS, { count: 'exact' })
-    .order('occurred_at', { ascending: false })
+    .order('occurred_at', { ascending: filter.order === 'asc' })
     .range(from, from + pageSize - 1);
+
+  if (filter.from) {
+    query = query.gte('occurred_at', filter.from);
+  }
+  if (filter.until) {
+    query = query.lt('occurred_at', filter.until);
+  }
 
   if (filter.decision && filter.decision !== 'all') {
     query = query.eq('decision', filter.decision);
@@ -173,7 +185,11 @@ export async function listAccessLogs(filter: LogFilter = {}): Promise<LogsResult
 
   const pageRows = (data ?? []) as AccessLogRow[];
   const rows = await completeSessions(pageRows);
-  let attempts = groupRows(rows);
+  let attempts = groupRows(rows, filter.order ?? 'desc').filter((attempt) =>
+    pageRows.some(
+      (row) => attemptKey(row) === attempt.key && row.occurred_at === attempt.occurredAt,
+    ),
+  );
 
   if (filter.decision && filter.decision !== 'all') {
     attempts = attempts.filter((attempt) => attempt.outcome === filter.decision);
@@ -187,6 +203,7 @@ export async function listAccessLogs(filter: LogFilter = {}): Promise<LogsResult
     attempts,
     badges,
     page,
+    total: count ?? 0,
     hasMore: from + pageRows.length < (count ?? 0),
   };
 }

@@ -17,12 +17,12 @@ import { ScreenHeader } from "@/components/layout/ScreenHeader";
 import { ActionMenu, type ActionMenuItem } from "@/components/ui/ActionMenu";
 import { Avatar } from "@/components/ui/Avatar";
 import { FloatingActionButton } from "@/components/ui/buttons/FloatingActionButton";
-import { GeneralButton } from "@/components/ui/buttons/GeneralButton";
 import { Card } from "@/components/ui/Card";
 import { Chip } from "@/components/ui/Chip";
 import { DetailRow } from "@/components/ui/DetailRow";
 import { Icon } from "@/components/ui/Icon";
 import { MessageBoxModal } from "@/components/ui/modals/MessageBoxModal";
+import { TablePagination } from "@/components/ui/TablePagination";
 import { floorShortLabel, staffRoleLabel } from "@/constants/floors";
 import {
   colors,
@@ -222,17 +222,19 @@ export function StaffScreen({ onCreate, onEdit, onReenrol }: StaffScreenProps) {
     items,
     photoUrls,
     total,
+    page,
+    pageSize,
     loading,
     refreshing,
-    loadingMore,
-    hasMore,
+    paging,
     error,
     search,
     setSearch,
     statusFilter,
     setStatusFilter,
     refresh,
-    loadMore,
+    goToPage,
+    setPageSize,
     deleteStaff,
     resetFace,
   } = useStaff();
@@ -240,6 +242,20 @@ export function StaffScreen({ onCreate, onEdit, onReenrol }: StaffScreenProps) {
   const snackbar = useSnackbar();
   const { width } = useWindowDimensions();
   const wide = width >= 840;
+
+  const pagination =
+    total > 0 ? (
+      <TablePagination
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        noun={total === 1 ? "staff member" : "staff members"}
+        busy={paging}
+        onPageChange={goToPage}
+        onPageSizeChange={setPageSize}
+        attached={wide}
+      />
+    ) : null;
 
   const [menuFor, setMenuFor] = useState<StaffRow | null>(null);
   const [deleteFor, setDeleteFor] = useState<StaffRow | null>(null);
@@ -420,7 +436,7 @@ export function StaffScreen({ onCreate, onEdit, onReenrol }: StaffScreenProps) {
             </Text>
           </View>
         ) : wide ? (
-          <View style={styles.table}>
+          <View style={[styles.table, paging && styles.paging]}>
             <View style={styles.tHeader}>
               <Text style={[styles.tHeaderText, styles.colStaff]}>
                 Staff member
@@ -447,9 +463,10 @@ export function StaffScreen({ onCreate, onEdit, onReenrol }: StaffScreenProps) {
                 />
               </View>
             ))}
+            {pagination}
           </View>
         ) : (
-          <View style={styles.cards}>
+          <View style={[styles.cards, paging && styles.paging]}>
             {items.map((member) => (
               <StaffCard
                 key={member.id}
@@ -463,16 +480,7 @@ export function StaffScreen({ onCreate, onEdit, onReenrol }: StaffScreenProps) {
           </View>
         )}
 
-        {hasMore ? (
-          <GeneralButton
-            label={loadingMore ? "Loading…" : "Load more"}
-            variant="outline"
-            fullWidth
-            loading={loadingMore}
-            disabled={loadingMore}
-            onPress={() => void loadMore()}
-          />
-        ) : null}
+        {wide ? null : pagination}
 
         <ActionMenu
           visible={menuFor != null}
@@ -582,6 +590,9 @@ const styles = StyleSheet.create({
   },
   cards: {
     gap: spacing.md,
+  },
+  paging: {
+    opacity: 0.55,
   },
   cardTop: {
     flexDirection: "row",

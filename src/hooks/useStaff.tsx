@@ -31,17 +31,19 @@ type StaffContextValue = {
   items: StaffRow[];
   photoUrls: Record<string, string>;
   total: number;
+  page: number;
+  pageSize: number;
   loading: boolean;
   refreshing: boolean;
-  loadingMore: boolean;
-  hasMore: boolean;
+  paging: boolean;
   error: string | null;
   search: string;
   setSearch: (value: string) => void;
   statusFilter: StatusFilter;
   setStatusFilter: (value: StatusFilter) => void;
   refresh: () => Promise<void>;
-  loadMore: () => Promise<void>;
+  goToPage: (page: number) => void;
+  setPageSize: (size: number) => void;
   createStaff: (input: StaffCreateInput) => Promise<StaffRow>;
   updateStaff: (id: string, input: StaffEditInput) => Promise<StaffRow>;
   deleteStaff: (id: string) => Promise<void>;
@@ -60,10 +62,10 @@ export function StaffProvider({ children }: { children: ReactNode }) {
   const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
-  const [hasMore, setHasMore] = useState(false);
+  const [pageSize, setPageSizeState] = useState<number>(STAFF_PAGE_SIZE);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [paging, setPaging] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [search, setSearch] = useState('');
@@ -72,6 +74,7 @@ export function StaffProvider({ children }: { children: ReactNode }) {
 
   const requestId = useRef(0);
   const mounted = useRef(true);
+  const pageRef = useRef(0);
 
   useEffect(() => {
     mounted.current = true;
@@ -95,7 +98,7 @@ export function StaffProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const load = useCallback(
-    async (nextPage: number, mode: 'initial' | 'refresh' | 'more') => {
+    async (nextPage: number, mode: 'initial' | 'refresh' | 'page') => {
       if (!isAdmin) {
         setItems([]);
         setTotal(0);
@@ -108,7 +111,7 @@ export function StaffProvider({ children }: { children: ReactNode }) {
 
       if (mode === 'initial') setLoading(true);
       if (mode === 'refresh') setRefreshing(true);
-      if (mode === 'more') setLoadingMore(true);
+      if (mode === 'page') setPaging(true);
       setError(null);
 
       try {
@@ -116,15 +119,15 @@ export function StaffProvider({ children }: { children: ReactNode }) {
           search: debouncedSearch,
           status: statusFilter,
           page: nextPage,
-          pageSize: STAFF_PAGE_SIZE,
+          pageSize,
         });
 
         if (!mounted.current || requestId.current !== id) return;
 
-        setItems((current) => (mode === 'more' ? [...current, ...result.rows] : result.rows));
+        setItems(result.rows);
         setTotal(result.total);
         setPage(result.page);
-        setHasMore(result.hasMore);
+        pageRef.current = result.page;
         void hydratePhotos(result.rows);
       } catch (caught) {
         if (mounted.current && requestId.current === id) {
@@ -134,11 +137,11 @@ export function StaffProvider({ children }: { children: ReactNode }) {
         if (mounted.current && requestId.current === id) {
           setLoading(false);
           setRefreshing(false);
-          setLoadingMore(false);
+          setPaging(false);
         }
       }
     },
-    [debouncedSearch, hydratePhotos, isAdmin, statusFilter],
+    [debouncedSearch, hydratePhotos, isAdmin, pageSize, statusFilter],
   );
 
   useEffect(() => {
@@ -152,12 +155,19 @@ export function StaffProvider({ children }: { children: ReactNode }) {
     };
   }, [load]);
 
-  const refresh = useCallback(() => load(0, 'refresh'), [load]);
+  const refresh = useCallback(() => load(pageRef.current, 'refresh'), [load]);
 
-  const loadMore = useCallback(async () => {
-    if (!hasMore || loadingMore || loading) return;
-    await load(page + 1, 'more');
-  }, [hasMore, load, loading, loadingMore, page]);
+  const goToPage = useCallback(
+    (next: number) => {
+      if (next < 0 || next === pageRef.current) return;
+      void load(next, 'page');
+    },
+    [load],
+  );
+
+  const setPageSize = useCallback((size: number) => {
+    setPageSizeState(size);
+  }, []);
 
   const createStaff = useCallback(
     async (input: StaffCreateInput) => {
@@ -215,17 +225,19 @@ export function StaffProvider({ children }: { children: ReactNode }) {
       items,
       photoUrls,
       total,
+      page,
+      pageSize,
       loading,
       refreshing,
-      loadingMore,
-      hasMore,
+      paging,
       error,
       search,
       setSearch,
       statusFilter,
       setStatusFilter,
       refresh,
-      loadMore,
+      goToPage,
+      setPageSize,
       createStaff,
       updateStaff,
       deleteStaff,
@@ -236,15 +248,17 @@ export function StaffProvider({ children }: { children: ReactNode }) {
       items,
       photoUrls,
       total,
+      page,
+      pageSize,
       loading,
       refreshing,
-      loadingMore,
-      hasMore,
+      paging,
       error,
       search,
       statusFilter,
       refresh,
-      loadMore,
+      goToPage,
+      setPageSize,
       createStaff,
       updateStaff,
       deleteStaff,

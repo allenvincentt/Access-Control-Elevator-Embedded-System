@@ -1,5 +1,5 @@
 import { type ReactNode } from 'react';
-import { Pressable, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
+import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, { useAnimatedStyle, interpolateColor } from 'react-native-reanimated';
 
 import { ScrollReveal, useInteraction } from '@/components/common/animations';
@@ -33,24 +33,63 @@ const ACCENT_GLOW: Record<NonNullable<CardProps['accent']>, string> = {
   success: 'rgba(30,138,80,0.28)',
 };
 
-export function Card({
+export function Card(props: CardProps) {
+  const content = props.onPress ? <InteractiveCard {...props} /> : <StaticCard {...props} />;
+  if (props.reveal) {
+    return <ScrollReveal delay={props.revealDelay ?? 0}>{content}</ScrollReveal>;
+  }
+  return content;
+}
+
+function StaticCard({
+  children,
+  padding = 'base',
+  elevated = false,
+  accent = 'none',
+  style,
+  accessibilityLabel,
+}: CardProps) {
+  const pad = typeof padding === 'number' ? padding : spacing[padding];
+  const accentColor = ACCENT_COLOR[accent];
+
+  return (
+    <View
+      accessibilityLabel={accessibilityLabel}
+      style={[
+        styles.card,
+        { padding: pad },
+        elevated ? shadow.md : shadow.sm,
+        {
+          borderColor: accentColor ?? colors.border,
+          shadowColor: accent === 'none' ? '#3A1210' : ACCENT_GLOW[accent],
+          shadowOpacity: 0.1,
+          shadowRadius: 14,
+          elevation: elevated ? 7 : 2,
+        },
+        accentColor ? { borderLeftWidth: 3, borderLeftColor: accentColor } : null,
+        style,
+      ]}
+    >
+      {children}
+    </View>
+  );
+}
+
+function InteractiveCard({
   children,
   onPress,
   padding = 'base',
   elevated = false,
   accent = 'none',
-  reveal = false,
-  revealDelay = 0,
   style,
   accessibilityLabel,
 }: CardProps) {
   const pad = typeof padding === 'number' ? padding : spacing[padding];
   const accentColor = ACCENT_COLOR[accent];
   const glowColor = ACCENT_GLOW[accent];
-  const interactive = Boolean(onPress);
   const { animatedStyle, hovered, pressed, handlers } = useInteraction({
-    hoverLift: interactive ? 4 : 0,
-    pressScale: interactive ? 0.985 : 1,
+    hoverLift: 4,
+    pressScale: 0.985,
   });
 
   const surfaceStyle = useAnimatedStyle(() => {
@@ -77,14 +116,13 @@ export function Card({
         elevated ? shadow.md : shadow.sm,
         accentColor ? { borderLeftWidth: 3, borderLeftColor: accentColor } : null,
         surfaceStyle,
-        !interactive && style,
       ]}
     >
       {children}
     </Animated.View>
   );
 
-  const content = interactive ? (
+  return (
     <Animated.View style={[animatedStyle, style]}>
       <Pressable
         accessibilityRole="button"
@@ -100,14 +138,7 @@ export function Card({
         {body}
       </Pressable>
     </Animated.View>
-  ) : (
-    body
   );
-
-  if (reveal) {
-    return <ScrollReveal delay={revealDelay}>{content}</ScrollReveal>;
-  }
-  return content;
 }
 
 const styles = StyleSheet.create({

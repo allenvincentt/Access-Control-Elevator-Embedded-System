@@ -12,7 +12,7 @@ static const char *STATUS_CHAR_UUID = "6e6c0002-b5a3-f393-e0a9-e50e24dcca9e";
 static const char *COMMAND_CHAR_UUID = "6e6c0003-b5a3-f393-e0a9-e50e24dcca9e";
 static const char *BOARDING_CHAR_UUID = "6e6c0004-b5a3-f393-e0a9-e50e24dcca9e";
 static const char *DEVICE_KEY = "Elevator123";
-static const char *FIRMWARE_BUILD = "2026-09-20-ring1";
+static const char *FIRMWARE_BUILD = "260924-1";
 
 static const uint8_t INSIDE_FLOOR_BUTTON_COUNT = 3;
 static const uint8_t HALL_CALL_COUNT = 4;
@@ -64,7 +64,8 @@ static const uint8_t OCCUPANCY_CONFIRM_REPORTS = 3;
 static const uint8_t RIDER_LIMIT = 16;
 static const uint8_t ACK_SLOTS = 4;
 static const uint8_t COMMAND_SLOTS = 4;
-static const size_t STATUS_MAX_BYTES = 500;
+static const size_t BLE_PACKET_MAX_BYTES = 180;
+static const uint32_t STATUS_COUNTER_CAP = 999;
 static const bool RIDE_MERGE_INTERSECTS = false;
 
 static const uint32_t MOTOR_PWM_FREQ = 20000;
@@ -1106,100 +1107,81 @@ static bool commandAuthorized(const String &body) {
 
 static String boardingJson();
 
+static int8_t floorIndexOrNone(int8_t index) {
+  return (index < 0 || index > 2) ? -1 : index;
+}
+
+static unsigned long capped(uint32_t value) {
+  return (unsigned long)(value > STATUS_COUNTER_CAP ? STATUS_COUNTER_CAP : value);
+}
+
 static String statusCore() {
-  String json = "{";
-  json += "\"state\":\"";
-  json += stateName();
-  json += "\",\"door_open\":";
-  json += (doorState != DOOR_CLOSED) ? "true" : "false";
-  json += ",\"current_floor\":\"";
-  json += FLOOR_KEY[currentFloor];
-  json += "\",\"selected_floor\":";
-  int8_t chosen = selectedFloorIndex;
-  if (chosen < 0 || chosen > 2) {
-    json += "null";
-  } else {
-    json += "\"";
-    json += FLOOR_KEY[chosen];
-    json += "\"";
-  }
-  json += ",\"session_result\":\"";
-  json += sessionResult;
-  json += "\",\"remaining_ms\":";
+  String json = "{\"st\":\"";
+  json += stateName()[0];
+  json += "\",\"do\":";
+  json += (doorState != DOOR_CLOSED) ? "1" : "0";
+  json += ",\"cf\":";
+  json += String((int)currentFloor);
+  json += ",\"sf\":";
+  json += String((int)floorIndexOrNone(selectedFloorIndex));
+  json += ",\"sr\":\"";
+  json += sessionResult[0];
+  json += "\",\"rm\":";
   json += String(remainingWindowMs());
-  json += ",\"denied_floor\":";
-  if (deniedFloorIndex < 0 || deniedFloorIndex > 2) {
-    json += "null";
-  } else {
-    json += "\"";
-    json += FLOOR_KEY[deniedFloorIndex];
-    json += "\"";
-  }
-  json += ",\"denied_seq\":";
-  json += String(deniedFloorSeq);
-  json += ",\"clients\":";
+  json += ",\"df\":";
+  json += String((int)floorIndexOrNone(deniedFloorIndex));
+  json += ",\"ds\":";
+  json += String((unsigned long)(deniedFloorSeq % 1000));
+  json += ",\"cl\":";
   json += String((unsigned)bleClientCount);
-  json += ",\"ride\":";
-  json += boardingJson();
   json += ",\"fw\":\"";
   json += FIRMWARE_BUILD;
-  json += "\"";
-  json += ",\"up\":";
-  json += String(millis() / 1000);
-  json += ",\"lp\":";
-  json += String(loopTicks);
+  json += "\",\"lp\":";
+  json += String((unsigned long)(loopTicks % 1000));
   json += ",\"rx\":";
-  json += String((unsigned long)commandWrites);
+  json += String(capped(commandWrites));
   if (commandDropped > 0) {
     json += ",\"dr\":";
-    json += String((unsigned long)commandDropped);
+    json += String(capped(commandDropped));
   }
-  json += ",\"ack_id\":\"";
-  json += ackId;
-  json += "\",\"ack_ok\":";
-  json += ackOk ? "true" : "false";
-  json += ",\"ack_error\":\"";
-  json += ackError;
-  json += "\"";
   return json;
 }
 
 static String statusJson(uint8_t slots) {
   String json = statusCore();
-  if (slots == 0) {
-    json += "}";
-    return json;
+  bool opened = false;
+
+  for (uint8_t i = 0; i < slots; i++) {
+    uint8_t index = (uint8_t)((ackCursor + ACK_SLOTS - 1 - i) % ACK_SLOTS);
+    if (ackLog[index].id[0] == '\0') {
+      continue;
+    }
+    json += opened ? "," : ",\"ak\":[";
+    opened = true;
+    json += "\"";
+    json += ackLog[index].id;
+    if (!ackLog[index].ok) {
+      json += "!";
+      json += ackLog[index].error;
+    }
+    json += "\"";
   }
 
-  json += ",\"acks\":[";
-  for (uint8_t i = 0; i < slots; i++) {
-    if (i > 0) {
-      json += ",";
-    }
-    uint8_t index = (uint8_t)((ackCursor + ACK_SLOTS - 1 - i) % ACK_SLOTS);
-    json += "{\"id\":\"";
-    json += ackLog[index].id;
-    json += "\",\"ok\":";
-    json += ackLog[index].ok ? "true" : "false";
-    json += ",\"err\":\"";
-    json += ackLog[index].error;
-    json += "\"}";
-  }
-  json += "]}";
+  json += opened ? "]}" : "}";
   return json;
 }
 
 static String statusPayload() {
   for (uint8_t slots = ACK_SLOTS; slots > 0; slots--) {
     String json = statusJson(slots);
-    if (json.length() <= STATUS_MAX_BYTES) {
+    if (json.length() <= BLE_PACKET_MAX_BYTES) {
       return json;
     }
   }
 
   String json = statusJson(0);
   Serial.print("[ble] status payload over the ");
-  Serial.print(STATUS_MAX_BYTES);
+  Serial.print(BLE_PACKET_MAX_BYTES);
   Serial.print(" byte budget even with no acks, publishing ");
   Serial.print(json.length());
   Serial.println(" bytes");
