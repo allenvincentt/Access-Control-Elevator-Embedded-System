@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -16,8 +17,8 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { HumanDetectionScreen } from "@/app/auth/scanner-screens/HumanDetectionScreen";
-import { ScannerFlow } from "@/app/auth/scanner-screens/ScannerFlow";
+import { HumanDetectionScreen } from "@/mobile/scanner-screens/HumanDetectionScreen";
+import { ScannerFlow } from "@/mobile/scanner-screens/ScannerFlow";
 import { HintRow } from "@/components/HintRow";
 import { useSnackbar } from "@/components/common/Snackbar";
 import { Input } from "@/components/ui/Input";
@@ -51,6 +52,7 @@ const COMPACT_TIMING = { duration: 260, easing: Easing.out(Easing.cubic) };
 const WELCOME_LINE_DESKTOP = 40;
 const DESKTOP_CARD_WIDTH = 460;
 const FORM_MAX_WIDTH = 440;
+const IS_MOBILE_APP = Platform.OS !== "web";
 
 export function SignInScreen() {
   const { signIn } = useAuth();
@@ -259,32 +261,34 @@ export function SignInScreen() {
                 onSubmitEditing={handleSubmit}
               />
 
-        <View style={styles.rowBetween}>
-          <Pressable
-            accessibilityRole="button"
-            hitSlop={8}
-            disabled={busy}
-            onPress={() => setDetecting(true)}
-            onHoverIn={() => setDetectorHovered(true)}
-            onHoverOut={() => setDetectorHovered(false)}
-          >
-            <Text style={[styles.link, detectorHovered && styles.linkHovered]}>
-              Go to Human Detector →
-            </Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            hitSlop={8}
-            disabled={busy}
-            onPress={() => setScanning(true)}
-            onHoverIn={() => setLinkHovered(true)}
-            onHoverOut={() => setLinkHovered(false)}
-          >
-            <Text style={[styles.link, linkHovered && styles.linkHovered]}>
-              Go to Scanning →
-            </Text>
-          </Pressable>
-        </View>
+        {IS_MOBILE_APP ? (
+          <View style={styles.rowBetween}>
+            <Pressable
+              accessibilityRole="button"
+              hitSlop={8}
+              disabled={busy}
+              onPress={() => setDetecting(true)}
+              onHoverIn={() => setDetectorHovered(true)}
+              onHoverOut={() => setDetectorHovered(false)}
+            >
+              <Text style={[styles.link, detectorHovered && styles.linkHovered]}>
+                Go to Human Detector →
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              hitSlop={8}
+              disabled={busy}
+              onPress={() => setScanning(true)}
+              onHoverIn={() => setLinkHovered(true)}
+              onHoverOut={() => setLinkHovered(false)}
+            >
+              <Text style={[styles.link, linkHovered && styles.linkHovered]}>
+                Go to Scanning →
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
 
         {formError ? (
           <HintRow tone="danger" title="Sign in failed">

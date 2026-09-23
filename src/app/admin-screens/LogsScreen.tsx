@@ -32,6 +32,7 @@ import {
   type AttemptBadge,
   type AttemptOutcome,
 } from "@/services/logsService";
+import type { AccessDecision } from "@/types/database";
 
 const FILTERS: { key: LogDecisionFilter; label: string }[] = [
   { key: "all", label: "All" },
@@ -132,6 +133,31 @@ function OutcomePill({ outcome }: { outcome: AttemptOutcome }) {
   );
 }
 
+function StageMark({
+  decision,
+  missing,
+}: {
+  decision?: AccessDecision;
+  missing: string;
+}) {
+  if (!decision) {
+    return (
+      <Text style={[styles.stageValue, { color: colors.textMuted }]}>
+        {missing}
+      </Text>
+    );
+  }
+  const granted = decision === "Granted";
+  return (
+    <Icon
+      name={granted ? "check" : "close"}
+      size={16}
+      color={granted ? colors.success : colors.danger}
+      accessibilityLabel={decision}
+    />
+  );
+}
+
 function StageLines({ attempt }: { attempt: AccessAttempt }) {
   const score = scoreLabel(attempt.face?.match_score ?? null);
 
@@ -139,39 +165,11 @@ function StageLines({ attempt }: { attempt: AccessAttempt }) {
     <View style={styles.stages}>
       <View style={styles.stageLine}>
         <Text style={styles.stageLabel}>Barcode:</Text>
-        <Text
-          style={[
-            styles.stageValue,
-            {
-              color:
-                attempt.barcode?.decision === "Granted"
-                  ? colors.success
-                  : attempt.barcode
-                    ? colors.danger
-                    : colors.textMuted,
-            },
-          ]}
-        >
-          {attempt.barcode?.decision ?? "—"}
-        </Text>
+        <StageMark decision={attempt.barcode?.decision} missing="—" />
       </View>
       <View style={styles.stageLine}>
         <Text style={styles.stageLabel}>Face:</Text>
-        <Text
-          style={[
-            styles.stageValue,
-            {
-              color:
-                attempt.face?.decision === "Granted"
-                  ? colors.success
-                  : attempt.face
-                    ? colors.danger
-                    : colors.textMuted,
-            },
-          ]}
-        >
-          {attempt.face?.decision ?? "Not reached"}
-        </Text>
+        <StageMark decision={attempt.face?.decision} missing="Not reached" />
         {score ? <Text style={styles.stageScore}>· {score}</Text> : null}
       </View>
     </View>
@@ -240,7 +238,12 @@ function AttemptCard({
   return (
     <Card padding="base" reveal revealDelay={Math.min(index, 8) * 50}>
       <View style={styles.cardTop}>
-        <PersonBadge attempt={attempt} badge={badge} photoUrl={photoUrl} compact />
+        <PersonBadge
+          attempt={attempt}
+          badge={badge}
+          photoUrl={photoUrl}
+          compact
+        />
         <OutcomePill outcome={attempt.outcome} />
       </View>
 
@@ -295,11 +298,7 @@ export function LogsScreen() {
       refreshing={refreshing}
       onRefresh={() => void refresh()}
       header={
-        <ScreenHeader
-          overline="Activity"
-          title="Access Logs"
-          subtitle="Full history of every badge scan and face verification attempt"
-        />
+        <ScreenHeader title="Access Logs" />
       }
     >
       <View style={[styles.controls, wide && styles.controlsWide]}>
@@ -398,7 +397,9 @@ export function LogsScreen() {
             <Text style={[styles.tHeaderText, styles.colPerson]}>
               Person / Badge
             </Text>
-            <Text style={[styles.tHeaderText, styles.colWhen]}>Date & Time</Text>
+            <Text style={[styles.tHeaderText, styles.colWhen]}>
+              Date & Time
+            </Text>
             <Text style={[styles.tHeaderText, styles.colOutcome]}>Outcome</Text>
             <Text style={[styles.tHeaderText, styles.colReason]}>
               Denial Reason

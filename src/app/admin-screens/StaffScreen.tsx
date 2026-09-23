@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import {
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -36,6 +37,8 @@ import { errorMessage } from "@/lib/errors";
 import type { AccessStatusKey, StaffRow } from "@/types/database";
 
 type StatusFilter = AccessStatusKey | "all";
+
+const IS_MOBILE_APP = Platform.OS !== "web";
 
 const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
   { key: "all", label: "All" },
@@ -248,13 +251,17 @@ export function StaffScreen({ onCreate, onEdit, onReenrol }: StaffScreenProps) {
 
   const menuItems: ActionMenuItem[] = menuTarget
     ? [
-        {
-          key: "edit",
-          label: "Edit staff member",
-          icon: "edit",
-          onPress: () => onEdit(menuTarget),
-        },
-        ...(menuTarget.role !== "Guest"
+        ...(IS_MOBILE_APP
+          ? [
+              {
+                key: "edit",
+                label: "Edit staff member",
+                icon: "edit" as const,
+                onPress: () => onEdit(menuTarget),
+              },
+            ]
+          : []),
+        ...(IS_MOBILE_APP && menuTarget.role !== "Guest"
           ? [
               {
                 key: "reenrol",
@@ -329,7 +336,7 @@ export function StaffScreen({ onCreate, onEdit, onReenrol }: StaffScreenProps) {
       <Screen
         refreshing={refreshing}
         onRefresh={() => void refresh()}
-        header={<ScreenHeader overline="Access management" title="Staff" />}
+        header={<ScreenHeader title="Staff" />}
       >
         <View style={styles.searchField}>
           <Icon name="search" size={18} color={colors.textMuted} />
@@ -510,12 +517,14 @@ export function StaffScreen({ onCreate, onEdit, onReenrol }: StaffScreenProps) {
         />
       </Screen>
 
-      <FloatingActionButton
-        icon="add"
-        onPress={onCreate}
-        accessibilityLabel="Add staff member"
-        style={styles.fab}
-      />
+      {IS_MOBILE_APP ? (
+        <FloatingActionButton
+          icon="add"
+          onPress={onCreate}
+          accessibilityLabel="Add staff member"
+          style={styles.fab}
+        />
+      ) : null}
     </View>
   );
 }
