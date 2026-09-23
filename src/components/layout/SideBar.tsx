@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Animated,
   Pressable,
@@ -9,18 +9,17 @@ import {
   View,
   type LayoutChangeEvent,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   GlassLensView,
   GlassPanel,
-  GlassPressable,
   useAnimatedValue,
   useGlassInteraction,
   useGlassLens,
   type GlassLensTarget,
 } from '@/components/GlassPanel';
-import { BrandMark } from '@/components/ui/BrandMark';
 import { BubbleButton, BubbleButtonGhostMetrics } from '@/components/ui/buttons/BubbleButton';
 import { Icon } from '@/components/ui/Icon';
 import {
@@ -32,7 +31,10 @@ import {
 import { GlassMotion } from '@/constants/glassTheme';
 import { colors, fontFamily, layout, radius } from '@/constants/themeColor';
 
+const BRAND_TILE = require('@/assets/brand/mascot-splash-tile-1024.png');
+
 type ItemLocalLayout = { x: number; y: number; width: number; height: number };
+type GroupOffset = { x: number; y: number };
 
 export const SIDEBAR_WIDTH_EXPANDED = 248;
 export const SIDEBAR_WIDTH_COLLAPSED = 84;
@@ -40,7 +42,15 @@ export const SIDEBAR_MARGIN = 16;
 
 const SHELL_PADDING_EXPANDED = 14;
 const SHELL_PADDING_COLLAPSED = 10;
+const SHELL_PADDING_VERTICAL = 18;
 const BRAND_MARK_SIZE = 28;
+
+const PILL_RADIUS = 30;
+const PILL_PADDING_VERTICAL = 10;
+const PILL_GAP = 12;
+const GROUP_GAP_EXPANDED = 14;
+const GROUP_LABEL_HEIGHT = 20;
+const SCROLL_BLEED = 8;
 
 const NAV_ICON_CENTER_SHIFT = Math.max(
   (SIDEBAR_WIDTH_COLLAPSED -
@@ -59,7 +69,6 @@ const MOBILE_SHELL_RADIUS = TAB_HEIGHT / 2 + MOBILE_SHELL_PADDING;
 
 const BRAND_SHADOW = {
   shadowColor: colors.primary,
-  shadowOpacity: 0.1,
   shadowRadius: 14,
   shadowOffset: { width: 0, height: 6 },
   elevation: 7,
@@ -96,7 +105,8 @@ export function SideBar({
   const railInteraction = useGlassInteraction({ shimmerOnPress: false });
 
   const navLens = useGlassLens('y');
-  const [groupOffsets, setGroupOffsets] = useState<Record<string, number>>({});
+  const [groupsOrigin, setGroupsOrigin] = useState<GroupOffset | null>(null);
+  const [groupLayouts, setGroupLayouts] = useState<Record<string, GroupOffset>>({});
   const [navItemLayouts, setNavItemLayouts] = useState<
     Partial<Record<AdminSection, ItemLocalLayout>>
   >({});
@@ -112,9 +122,31 @@ export function SideBar({
     return map;
   }, []);
 
+  const groupOffsets = useMemo(() => {
+    const map: Record<string, GroupOffset> = {};
+    if (!groupsOrigin) {
+      return map;
+    }
+    for (const [label, offset] of Object.entries(groupLayouts)) {
+      map[label] = { x: groupsOrigin.x + offset.x, y: groupsOrigin.y + offset.y };
+    }
+    return map;
+  }, [groupsOrigin, groupLayouts]);
+
+  const registerGroupsOrigin = useCallback((event: LayoutChangeEvent) => {
+    const { x, y } = event.nativeEvent.layout;
+    setGroupsOrigin((current) => (current && current.x === x && current.y === y ? current : { x, y }));
+  }, []);
+
   const registerGroupLayout = useCallback((label: string, event: LayoutChangeEvent) => {
-    const { y } = event.nativeEvent.layout;
-    setGroupOffsets((current) => (current[label] === y ? current : { ...current, [label]: y }));
+    const { x, y } = event.nativeEvent.layout;
+    setGroupLayouts((current) => {
+      const previous = current[label];
+      if (previous && previous.x === x && previous.y === y) {
+        return current;
+      }
+      return { ...current, [label]: { x, y } };
+    });
   }, []);
 
   const registerNavItemLayout = useCallback(
@@ -143,14 +175,14 @@ export function SideBar({
     if (!groupLabel || !itemLayout) {
       return;
     }
-    const groupY = groupOffsets[groupLabel];
-    if (groupY === undefined) {
+    const group = groupOffsets[groupLabel];
+    if (!group) {
       return;
     }
 
     const target: GlassLensTarget = {
-      x: itemLayout.x,
-      y: groupY + itemLayout.y,
+      x: group.x + itemLayout.x,
+      y: group.y + itemLayout.y,
       width: Math.max(itemLayout.width, 24),
       height: Math.max(itemLayout.height, 30),
     };
@@ -275,129 +307,252 @@ export function SideBar({
     inputRange: [0, 0.6, 1],
     outputRange: [1, 0, 0],
   });
-  const groupLabelSpace = labelOpacity.interpolate({ inputRange: [0, 1], outputRange: [0, 6] });
+  const groupLabelHeight = collapseProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [GROUP_LABEL_HEIGHT, 0],
+  });
   const iconShift = collapseProgress.interpolate({
     inputRange: [0, 1],
     outputRange: [0, NAV_ICON_CENTER_SHIFT],
   });
-  const chevronRotate = collapseProgress.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0deg', '180deg'],
-  });
   const shellRadius = collapseProgress.interpolate({ inputRange: [0, 1], outputRange: [32, 40] });
+  const shellPresence = collapseProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 0],
+  });
+  const shellShadowOpacity = collapseProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.1, 0],
+  });
+  const pillPresence = collapseProgress;
+  const segmentPaddingHorizontal = collapseProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [SHELL_PADDING_EXPANDED, SHELL_PADDING_COLLAPSED],
+  });
+  const segmentPaddingVertical = collapseProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, PILL_PADDING_VERTICAL],
+  });
+  const shellPaddingVertical = collapseProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [SHELL_PADDING_VERTICAL, 0],
+  });
+  const segmentItemSpacing = collapseProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, BubbleButtonGhostMetrics.spacing],
+  });
+  const railGap = collapseProgress.interpolate({ inputRange: [0, 1], outputRange: [4, PILL_GAP] });
+  const groupGap = collapseProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [GROUP_GAP_EXPANDED, PILL_GAP],
+  });
+  const brandPaddingBottom = collapseProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [16, 0],
+  });
+  const footerPaddingTop = collapseProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [10, 0],
+  });
 
+  const segmentStyle = {
+    paddingHorizontal: segmentPaddingHorizontal,
+    paddingTop: segmentPaddingVertical,
+    paddingBottom: Animated.subtract(segmentPaddingVertical, segmentItemSpacing),
+  };
+  const brandSegmentStyle = {
+    paddingHorizontal: segmentPaddingHorizontal,
+    paddingVertical: segmentPaddingVertical,
+  };
+
+  return (
+    <Animated.View
+      style={[
+        styles.desktopRail,
+        {
+          marginTop: safeAreaTop + SIDEBAR_MARGIN,
+          marginBottom: safeAreaBottom + SIDEBAR_MARGIN,
+          marginLeft: SIDEBAR_MARGIN,
+          width: panelWidth,
+          paddingVertical: shellPaddingVertical,
+          gap: railGap,
+        },
+      ]}>
+      <GlassPanel
+        variant="floating"
+        backgroundHint={colors.background}
+        reflection
+        sheen
+        presence={shellPresence}
+        interaction={shellInteraction}
+        reflectionStyle={styles.shellReflection}
+        style={[
+          styles.desktopShell,
+          BRAND_SHADOW,
+          { borderRadius: shellRadius, shadowOpacity: shellShadowOpacity },
+        ]}>
+        <Animated.View
+          pointerEvents="none"
+          style={[styles.desktopShellEdge, { borderRadius: shellRadius, opacity: shellPresence }]}
+        />
+      </GlassPanel>
+
+      <SegmentPill presence={pillPresence} interaction={shellInteraction} style={brandSegmentStyle}>
+        <Animated.View style={[styles.brandRow, { paddingBottom: brandPaddingBottom }]}>
+          <Animated.View style={[styles.brandMark, { transform: [{ translateX: iconShift }] }]}>
+            <Image
+              source={BRAND_TILE}
+              style={styles.brandImage}
+              contentFit="contain"
+              accessibilityIgnoresInvertColors
+            />
+          </Animated.View>
+          <Animated.View style={[styles.brandText, { opacity: labelOpacity }]} pointerEvents="none">
+            <Text style={styles.brandName} numberOfLines={1}>
+              Elevator System
+            </Text>
+          </Animated.View>
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.brandDivider, { opacity: shellPresence }]}
+          />
+        </Animated.View>
+      </SegmentPill>
+
+      <ScrollView
+        style={styles.nav}
+        contentContainerStyle={styles.navContent}
+        showsVerticalScrollIndicator={false}>
+        <Animated.View pointerEvents="none" style={[styles.lensLayer, { opacity: shellPresence }]}>
+          <GlassLensView
+            lens={navLens}
+            radius={radius.md}
+            tint={colors.primaryTint}
+            backgroundHint={colors.background}
+          />
+        </Animated.View>
+
+        <View style={styles.navSpacer} />
+
+        <Animated.View style={[styles.groups, { gap: groupGap }]} onLayout={registerGroupsOrigin}>
+          {adminNavigation.map((group) => {
+            const offset = groupOffsets[group.label];
+            return (
+              <SegmentPill
+                key={group.label}
+                presence={pillPresence}
+                interaction={shellInteraction}
+                style={segmentStyle}
+                onLayout={(event) => registerGroupLayout(group.label, event)}>
+                <Animated.View
+                  pointerEvents="none"
+                  style={[styles.pillLensClip, { opacity: pillPresence }]}>
+                  {offset ? (
+                    <View style={[styles.pillLensOrigin, { left: -offset.x, top: -offset.y }]}>
+                      <GlassLensView
+                        lens={navLens}
+                        radius={radius.md}
+                        tint={colors.primaryTint}
+                        backgroundHint={colors.background}
+                      />
+                    </View>
+                  ) : null}
+                </Animated.View>
+                <Animated.Text
+                  style={[styles.groupLabel, { opacity: labelOpacity, height: groupLabelHeight }]}
+                  numberOfLines={1}
+                  pointerEvents="none">
+                  {group.label.toUpperCase()}
+                </Animated.Text>
+                {group.items.map((item) => (
+                  <BubbleButton
+                    key={item.section}
+                    variant="ghost"
+                    icon={item.icon}
+                    label={item.label}
+                    active={activeSection === item.section}
+                    activeSkin={false}
+                    labelOpacity={labelOpacity}
+                    iconOffsetX={iconShift}
+                    backgroundHint={colors.background}
+                    accessibilityLabel={item.label}
+                    accessibilityState={{ selected: activeSection === item.section }}
+                    style={styles.navItem}
+                    onLayout={(event) => registerNavItemLayout(item.section, event)}
+                    onPress={() => onNavigate(item.section)}
+                  />
+                ))}
+              </SegmentPill>
+            );
+          })}
+        </Animated.View>
+
+        <View style={styles.navSpacer} />
+      </ScrollView>
+
+      <SegmentPill presence={pillPresence} interaction={shellInteraction} style={segmentStyle}>
+        <Animated.View style={[styles.footer, { paddingTop: footerPaddingTop }]}>
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.footerDivider, { opacity: shellPresence }]}
+          />
+          <BubbleButton
+            variant="ghost"
+            icon={collapsed ? 'chevronRight' : 'chevronLeft'}
+            label="Collapse"
+            labelOpacity={labelOpacity}
+            iconOffsetX={iconShift}
+            backgroundHint={colors.background}
+            accessibilityLabel={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            accessibilityState={{ expanded: !collapsed }}
+            style={styles.navItem}
+            onPress={handleToggleCollapsed}
+          />
+          {onSignOut ? (
+            <BubbleButton
+              variant="ghost"
+              icon="logout"
+              label="Sign out"
+              labelOpacity={labelOpacity}
+              iconOffsetX={iconShift}
+              backgroundHint={colors.background}
+              accessibilityLabel="Sign out"
+              style={styles.navItem}
+              onPress={onSignOut}
+            />
+          ) : null}
+        </Animated.View>
+      </SegmentPill>
+    </Animated.View>
+  );
+}
+
+function SegmentPill({
+  children,
+  presence,
+  interaction,
+  style,
+  onLayout,
+}: {
+  children: ReactNode;
+  presence: Animated.Value | Animated.AnimatedInterpolation<number>;
+  interaction: ReturnType<typeof useGlassInteraction>;
+  style: object;
+  onLayout?: (event: LayoutChangeEvent) => void;
+}) {
   return (
     <GlassPanel
       variant="floating"
       backgroundHint={colors.background}
       reflection
       sheen
-      interaction={shellInteraction}
-      reflectionStyle={styles.shellReflection}
-      style={[
-        styles.desktopShell,
-        {
-          marginTop: safeAreaTop + SIDEBAR_MARGIN,
-          marginBottom: safeAreaBottom + SIDEBAR_MARGIN,
-          marginLeft: SIDEBAR_MARGIN,
-          width: panelWidth,
-          borderRadius: shellRadius,
-          paddingHorizontal: collapseProgress.interpolate({
-            inputRange: [0, 1],
-            outputRange: [SHELL_PADDING_EXPANDED, SHELL_PADDING_COLLAPSED],
-          }),
-        },
-        BRAND_SHADOW,
-      ]}>
-      <Animated.View
-        pointerEvents="none"
-        style={[styles.desktopShellEdge, { borderRadius: shellRadius }]}
-      />
-      <View style={styles.brandRow}>
-        <Animated.View style={[styles.brandMark, { transform: [{ translateX: iconShift }] }]}>
-          <BrandMark size={BRAND_MARK_SIZE} />
-        </Animated.View>
-        <Animated.View style={[styles.brandText, { opacity: labelOpacity }]} pointerEvents="none">
-          <Text style={styles.brandName} numberOfLines={1}>
-            Elevator System
-          </Text>
-          <Text style={styles.brandCaption} numberOfLines={1}>
-            Access Control
-          </Text>
-        </Animated.View>
-      </View>
-
-      <GlassPressable
-        accessibilityLabel={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        variant="control"
-        radius={16}
-        lift={1}
-        flex={0.08}
-        style={styles.collapseBump}
-        onPress={handleToggleCollapsed}>
-        <Animated.View style={{ transform: [{ rotate: chevronRotate }] }}>
-          <Icon name="chevronLeft" size={14} color={colors.textMuted} />
-        </Animated.View>
-      </GlassPressable>
-
-      <ScrollView
-        style={styles.nav}
-        contentContainerStyle={styles.navContent}
-        showsVerticalScrollIndicator={false}>
-        <GlassLensView
-          lens={navLens}
-          radius={radius.md}
-          tint={colors.primaryTint}
-          backgroundHint={colors.background}
-        />
-        {adminNavigation.map((group) => (
-          <View
-            key={group.label}
-            style={styles.group}
-            onLayout={(event) => registerGroupLayout(group.label, event)}>
-            <Animated.Text
-              style={[styles.groupLabel, { opacity: labelOpacity, marginBottom: groupLabelSpace }]}
-              numberOfLines={1}
-              pointerEvents="none">
-              {group.label.toUpperCase()}
-            </Animated.Text>
-            {group.items.map((item) => (
-              <BubbleButton
-                key={item.section}
-                variant="ghost"
-                icon={item.icon}
-                label={item.label}
-                active={activeSection === item.section}
-                activeSkin={false}
-                labelOpacity={labelOpacity}
-                iconOffsetX={iconShift}
-                backgroundHint={colors.background}
-                accessibilityLabel={item.label}
-                accessibilityState={{ selected: activeSection === item.section }}
-                style={styles.navItem}
-                onLayout={(event) => registerNavItemLayout(item.section, event)}
-                onPress={() => onNavigate(item.section)}
-              />
-            ))}
-          </View>
-        ))}
-      </ScrollView>
-
-      {onSignOut && (
-        <View style={styles.footer}>
-          <BubbleButton
-            variant="ghost"
-            icon="logout"
-            label="Sign out"
-            labelOpacity={labelOpacity}
-            iconOffsetX={iconShift}
-            backgroundHint={colors.background}
-            accessibilityLabel="Sign out"
-            style={styles.navItem}
-            onPress={onSignOut}
-          />
-        </View>
-      )}
+      presence={presence}
+      interaction={interaction}
+      reflectionStyle={styles.pillReflection}
+      onLayout={onLayout}
+      style={[styles.pill, style]}>
+      <Animated.View pointerEvents="none" style={[styles.pillEdge, { opacity: presence }]} />
+      {children}
     </GlassPanel>
   );
 }
@@ -466,8 +621,11 @@ function MobileNavTab({
 }
 
 const styles = StyleSheet.create({
+  desktopRail: {
+    position: 'relative',
+  },
   desktopShell: {
-    paddingVertical: 18,
+    ...StyleSheet.absoluteFill,
   },
   desktopShellEdge: {
     ...StyleSheet.absoluteFill,
@@ -478,15 +636,40 @@ const styles = StyleSheet.create({
     left: 30,
     right: 30,
   },
+  pill: {
+    borderRadius: PILL_RADIUS,
+  },
+  pillEdge: {
+    ...StyleSheet.absoluteFill,
+    borderRadius: PILL_RADIUS,
+    borderWidth: 1.5,
+    borderColor: colors.borderStrong,
+  },
+  pillReflection: {
+    left: PILL_RADIUS - 6,
+    right: PILL_RADIUS - 6,
+  },
+  pillLensClip: {
+    ...StyleSheet.absoluteFill,
+    borderRadius: PILL_RADIUS,
+    overflow: 'hidden',
+  },
+  pillLensOrigin: {
+    position: 'absolute',
+  },
   brandRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: BubbleButtonGhostMetrics.gap,
     paddingHorizontal: BubbleButtonGhostMetrics.paddingHorizontal,
-    paddingBottom: 16,
-    marginBottom: 4,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.55)',
+  },
+  brandDivider: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.55)',
   },
   brandMark: {
     width: BubbleButtonGhostMetrics.iconSlot,
@@ -503,47 +686,54 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 15,
   },
-  brandCaption: {
-    color: colors.textMuted,
-    fontFamily: fontFamily.medium,
-    fontWeight: '500',
-    fontSize: 10.5,
-  },
-  collapseBump: {
-    position: 'absolute',
-    top: 2,
-    right: -12,
-    width: 30,
-    height: 30,
-    zIndex: 5,
+  brandImage: {
+    width: BRAND_MARK_SIZE,
+    height: BRAND_MARK_SIZE,
   },
   nav: {
     flex: 1,
+    marginHorizontal: -SIDEBAR_MARGIN,
+    marginVertical: -SCROLL_BLEED,
   },
   navContent: {
     position: 'relative',
-    paddingBottom: 8,
+    flexGrow: 1,
+    paddingHorizontal: SIDEBAR_MARGIN,
+    paddingVertical: SCROLL_BLEED,
   },
-  group: {
-    marginBottom: 14,
+  lensLayer: {
+    ...StyleSheet.absoluteFill,
+  },
+  navSpacer: {
+    flexGrow: 1,
+  },
+  groups: {
+    position: 'relative',
   },
   groupLabel: {
     color: colors.textMuted,
     fontFamily: fontFamily.semibold,
     fontWeight: '600',
     fontSize: 10.5,
+    lineHeight: 14,
     letterSpacing: 0.6,
     paddingHorizontal: BubbleButtonGhostMetrics.paddingHorizontal,
+    overflow: 'hidden',
   },
   navItem: {
     width: '100%',
     marginBottom: BubbleButtonGhostMetrics.spacing,
   },
   footer: {
-    paddingTop: 10,
-    marginTop: 2,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.55)',
+    position: 'relative',
+  },
+  footerDivider: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    height: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.55)',
   },
   mobileShell: {
     position: 'absolute',

@@ -43,6 +43,25 @@ function follow(current: Rect, target: Rect): Rect {
   };
 }
 
+function centreDistance(track: Rect, candidate: Rect): number {
+  const width = Math.max(track.right - track.left, PERSON_DETECTION.trackCentreFloor);
+  const height = Math.max(track.bottom - track.top, PERSON_DETECTION.trackCentreFloor);
+  const dx = (candidate.left + candidate.right - track.left - track.right) / 2 / width;
+  const dy = (candidate.top + candidate.bottom - track.top - track.bottom) / 2 / height;
+  return Math.hypot(dx, dy);
+}
+
+function affinity(track: Rect, candidate: Rect): number {
+  const overlap = intersectionOverUnion(track, candidate);
+  if (overlap >= PERSON_DETECTION.iouMatchThreshold) return overlap;
+
+  const distance = centreDistance(track, candidate);
+  if (distance >= PERSON_DETECTION.trackCentreMatch) return 0;
+  return (
+    PERSON_DETECTION.iouMatchThreshold * 0.99 * (1 - distance / PERSON_DETECTION.trackCentreMatch)
+  );
+}
+
 type Pairing = {
   track: number;
   candidate: number;
@@ -75,8 +94,8 @@ export class PersonTracker {
     const pairings: Pairing[] = [];
     for (let track = 0; track < this.tracks.length; track += 1) {
       for (let candidate = 0; candidate < candidates.length; candidate += 1) {
-        const overlap = intersectionOverUnion(this.tracks[track].box, candidates[candidate]);
-        if (overlap >= PERSON_DETECTION.iouMatchThreshold) {
+        const overlap = affinity(this.tracks[track].box, candidates[candidate]);
+        if (overlap > 0) {
           pairings.push({ track, candidate, overlap });
         }
       }
@@ -102,11 +121,16 @@ export class PersonTracker {
       if (!matchedTracks.has(track)) this.tracks[track].misses += 1;
     }
 
-    this.tracks = this.tracks.filter((track) => track.misses <= PERSON_DETECTION.trackMissLimit);
+    this.tracks = this.tracks.filter((track) =>
+      track.confirmed
+        ? track.misses <= PERSON_DETECTION.trackMissLimit
+        : track.misses === 0,
+    );
 
     for (let index = 0; index < candidates.length; index += 1) {
       if (matchedCandidates.has(index)) continue;
       const candidate = candidates[index];
+      if (!candidate.strong) continue;
 
       // A box sitting largely inside a track that is already live is another view
       // of that same person, not a new one. Matching on union alone misses this:

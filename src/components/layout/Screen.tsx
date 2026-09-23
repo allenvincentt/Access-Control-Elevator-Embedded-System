@@ -3,6 +3,7 @@ import {
   RefreshControl,
   ScrollView,
   StyleSheet,
+  useWindowDimensions,
   View,
   type StyleProp,
   type ViewStyle,
@@ -37,12 +38,14 @@ export function Screen({
   contentStyle,
 }: ScreenProps) {
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
+  const compact = width < layout.compactNavigation;
   const paddingBottom = (bottomClearance ? layout.bottomNavClearance : spacing.xl) + insets.bottom;
   const innerPadding = padded ? { paddingHorizontal: layout.screenPadding } : null;
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: background }]} edges={['top']}>
-      {header ? <View style={[styles.header, innerPadding]}>{header}</View> : null}
+      {header ? <View style={[styles.header, compact ? styles.headerCompact : null, innerPadding]}>{header}</View> : null}
       {scroll ? (
         <ScrollView
           style={styles.flex}
@@ -84,8 +87,11 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    paddingTop: spacing.sm,
+    paddingTop: spacing['2xl'],
     paddingBottom: spacing.md,
+  },
+  headerCompact: {
+    paddingTop: spacing.lg,
   },
   scrollContent: {
     paddingTop: spacing.xs,

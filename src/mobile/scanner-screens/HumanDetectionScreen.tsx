@@ -26,6 +26,7 @@ import {
   colors,
   palette,
   radius,
+  shadow,
   spacing,
   typography,
 } from "@/constants/themeColor";
@@ -36,9 +37,7 @@ import { reportOccupancy } from "@/services/elevatorService";
 import {
   PERSON_DETECTION,
   PERSON_MODEL_FAILURE_MESSAGES,
-  PERSON_ROI_WIDE,
-  PERSON_SCOPE_FULL,
-  PERSON_SCOPES,
+  PERSON_ROI_OVERHEAD,
 } from "@/services/person/constants";
 import {
   detectPeople,
@@ -77,6 +76,7 @@ type OverlayBox = {
 
 const DANGER = "#FF6B60";
 const SUCCESS = "#4ADE80";
+const WARNING = "#FBBF24";
 const PANEL_MAX_WIDTH = 380;
 
 const AnimatedRect = Animated.createAnimatedComponent(Rect);
@@ -205,10 +205,6 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
         if (counting !== trackingRef.current) {
           trackingRef.current = counting;
           reportedKey.current = null;
-          // Tracks built up while idling describe the car as it was before this
-          // count began. Carrying them across means a count opens with whatever
-          // the detector had already settled on, including anything it held onto
-          // in an empty car, and those tracks are confirmed so they count at once.
           tracker.current.reset();
         }
 
@@ -223,7 +219,7 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
 
         let outcome;
         try {
-          outcome = await detectPeople(frame, PERSON_ROI_WIDE, PERSON_SCOPES);
+          outcome = await detectPeople(frame, PERSON_ROI_OVERHEAD);
         } catch (error) {
           discardFile(frame.uri);
           if (!cancelled && mounted.current) {
@@ -311,6 +307,7 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
     viewHeight,
   );
   const wide = viewWidth > viewHeight;
+  const compact = !fault && !linkFault;
 
   if (model && !model.ready) {
     const copy = PERSON_MODEL_FAILURE_MESSAGES[model.failure];
@@ -355,7 +352,9 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
         onExit={onExit}
         exitIcon="back"
         exitLabel="Back to sign in"
-        panelStyle={wide ? styles.panelWide : undefined}
+        panelStyle={
+          compact ? styles.panelCompact : wide ? styles.panelWide : undefined
+        }
         camera={
           <>
             <CameraView
@@ -368,13 +367,13 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
             />
             <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
               <Rect
-                x={PERSON_ROI_WIDE.left * viewWidth}
-                y={PERSON_ROI_WIDE.top * viewHeight}
+                x={PERSON_ROI_OVERHEAD.left * viewWidth}
+                y={PERSON_ROI_OVERHEAD.top * viewHeight}
                 width={
-                  (PERSON_ROI_WIDE.right - PERSON_ROI_WIDE.left) * viewWidth
+                  (PERSON_ROI_OVERHEAD.right - PERSON_ROI_OVERHEAD.left) * viewWidth
                 }
                 height={
-                  (PERSON_ROI_WIDE.bottom - PERSON_ROI_WIDE.top) * viewHeight
+                  (PERSON_ROI_OVERHEAD.bottom - PERSON_ROI_OVERHEAD.top) * viewHeight
                 }
                 fill="none"
                 stroke="rgba(255,255,255,0.45)"
@@ -392,7 +391,7 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
                   {`model ${stats.reported}/${stats.scanned}  gate ${stats.decoded}  merged ${stats.merged}  in view ${stats.accepted}  counted ${observed}`}
                 </Text>
                 <Text style={styles.diagnosticsText}>
-                  {`best person score ${stats.topScore.toFixed(2)} · needs ${PERSON_SCOPE_FULL.minScore.toFixed(2)}`}
+                  {`${stats.kind} ${stats.target} · best ${stats.topScore.toFixed(2)} · new ${stats.minScore.toFixed(2)} · keep ${stats.sustainScore.toFixed(2)}`}
                 </Text>
               </View>
             ) : null}
@@ -428,44 +427,55 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
             </>
           ) : counting ? (
             <>
-              <PanelHead
-                icon={matches ? "checkCircle" : "person"}
-                color={matches ? colors.success : colors.primary}
-                title={matches ? "Occupancy matches" : "Counting…"}
-              />
-              <View style={styles.tally}>
-                <Tally label="Verified" value={expected} tone={colors.text} />
-                <Tally
-                  label="In the car"
-                  value={observed}
-                  tone={matches ? colors.success : DANGER}
+              <View style={styles.compactHead}>
+                <Icon
+                  name={matches ? "checkCircle" : "person"}
+                  size={12}
+                  color={matches ? SUCCESS : palette.white}
                 />
+                <Text style={styles.compactTitle}>
+                  {matches ? "Occupancy matches" : "Counting…"}
+                </Text>
               </View>
-              <Text style={styles.body}>
+              <Text style={styles.compactText}>
+                {"Verified "}
+                <Text style={styles.compactValue}>{expected}</Text>
+                {"  ·  In the car "}
+                <Text
+                  style={[
+                    styles.compactValue,
+                    { color: matches ? SUCCESS : DANGER },
+                  ]}
+                >
+                  {observed}
+                </Text>
+              </Text>
+              <Text style={styles.compactText}>
                 {tracked?.stable
                   ? "Count is steady and has been sent to the controller."
                   : "Holding until the count is steady…"}
               </Text>
               {boarding && boarding.attempt > 0 ? (
-                <HintRow tone="warning" title="Attempt">
-                  {`${boarding.attempt} of ${boarding.maxAttempts} used.`}
-                </HintRow>
+                <Text style={[styles.compactText, styles.compactWarning]}>
+                  {`Attempt ${boarding.attempt} of ${boarding.maxAttempts} used.`}
+                </Text>
               ) : null}
             </>
           ) : (
             <>
-              <PanelHead
-                icon="elevator"
-                color={colors.primary}
-                title={idleTitle(boarding?.phase)}
-              />
-              <Text style={styles.body}>
+              <View style={styles.compactHead}>
+                <Icon name="elevator" size={12} color={palette.white} />
+                <Text style={styles.compactTitle}>
+                  {idleTitle(boarding?.phase)}
+                </Text>
+              </View>
+              <Text style={styles.compactText}>
                 {idleBody(boarding?.phase, expected)}
               </Text>
               {ride.error ? (
-                <HintRow tone="danger" title="Link">
+                <Text style={[styles.compactText, styles.compactError]}>
                   {ride.error}
-                </HintRow>
+                </Text>
               ) : null}
             </>
           )
@@ -489,23 +499,6 @@ function idleBody(phase: string | undefined, expected: number): string {
     return "The controller released the car. Counting stops until the next ride.";
   }
   return "Waiting for a verified group to board at the lobby.";
-}
-
-function Tally({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: number;
-  tone: string;
-}) {
-  return (
-    <View style={styles.tallyCell}>
-      <Text style={styles.tallyLabel}>{label}</Text>
-      <Text style={[styles.tallyValue, { color: tone }]}>{value}</Text>
-    </View>
-  );
 }
 
 function PanelHead({
@@ -587,6 +580,41 @@ const styles = StyleSheet.create({
     width: "100%",
     maxWidth: PANEL_MAX_WIDTH,
   },
+  panelCompact: {
+    alignSelf: "flex-end",
+    maxWidth: 260,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    gap: 2,
+    ...shadow.none,
+  },
+  compactHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+  },
+  compactTitle: {
+    color: palette.white,
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  compactText: {
+    color: "rgba(255,255,255,0.85)",
+    fontSize: 11,
+  },
+  compactValue: {
+    color: palette.white,
+    fontWeight: "700",
+    fontVariant: ["tabular-nums"],
+  },
+  compactError: {
+    color: DANGER,
+  },
+  compactWarning: {
+    color: WARNING,
+  },
   head: {
     flexDirection: "row",
     alignItems: "center",
@@ -595,33 +623,6 @@ const styles = StyleSheet.create({
   title: {
     color: colors.text,
     ...typography.subheading,
-  },
-  body: {
-    color: colors.textSecondary,
-    ...typography.body,
-  },
-  tally: {
-    flexDirection: "row",
-    gap: spacing.sm,
-  },
-  tallyCell: {
-    flex: 1,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.base,
-    borderRadius: radius.lg,
-    backgroundColor: colors.surfaceSunken,
-    borderWidth: 1,
-    borderColor: colors.border,
-    gap: spacing.xs,
-  },
-  tallyLabel: {
-    color: colors.textMuted,
-    ...typography.overline,
-    letterSpacing: 0.6,
-  },
-  tallyValue: {
-    color: palette.ink,
-    ...typography.display,
   },
   diagnostics: {
     position: "absolute",

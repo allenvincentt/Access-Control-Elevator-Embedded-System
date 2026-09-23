@@ -2,7 +2,7 @@ import { CameraView } from "expo-camera";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { StyleSheet, Text, View } from "react-native";
 
-import type { VerificationSession } from "@/app/auth/scanner-screens/ScannerFlow";
+import type { VerificationSession } from "@/mobile/scanner-screens/ScannerFlow";
 import { useSnackbar } from "@/components/common/Snackbar";
 import { HintRow } from "@/components/HintRow";
 import { CameraPermissionGate } from "@/components/scanner/CameraPermissionGate";

@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { errorMessage } from '@/lib/errors';
-import { fetchHomeOverview } from '@/services/dashboardService';
+import {
+  fetchHomeInsights,
+  fetchHomeOverview,
+  type HomeInsights,
+} from '@/services/dashboardService';
 import type { HomeOverview } from '@/types/database';
 
 /** Silent background refresh, so the dashboard stays close to live. */
@@ -9,6 +13,7 @@ const AUTO_REFRESH_MS = 60_000;
 
 export function useHomeOverview() {
   const [overview, setOverview] = useState<HomeOverview | null>(null);
+  const [insights, setInsights] = useState<HomeInsights | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -31,9 +36,13 @@ export function useHomeOverview() {
     if (mode !== 'silent') setError(null);
 
     try {
-      const next = await fetchHomeOverview();
+      const [next, extra] = await Promise.all([
+        fetchHomeOverview(),
+        fetchHomeInsights().catch(() => null),
+      ]);
       if (!mounted.current) return;
       setOverview(next);
+      if (extra) setInsights(extra);
       setError(null);
     } catch (caught) {
       if (!mounted.current || mode === 'silent') return;
@@ -63,6 +72,7 @@ export function useHomeOverview() {
 
   return {
     overview,
+    insights,
     loading,
     refreshing,
     error,

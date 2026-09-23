@@ -1,8 +1,8 @@
 import { useCallback, useState } from 'react';
 
-import { BarcodeScannerScreen } from '@/app/auth/scanner-screens/BarcodeScannerScreen';
-import { DoorReleaseScreen } from '@/app/auth/scanner-screens/DoorReleaseScreen';
-import { FacialRecognitionScreen } from '@/app/auth/scanner-screens/FacialRecognitionScreen';
+import { BarcodeScannerScreen } from '@/mobile/scanner-screens/BarcodeScannerScreen';
+import { DoorReleaseScreen } from '@/mobile/scanner-screens/DoorReleaseScreen';
+import { FacialRecognitionScreen } from '@/mobile/scanner-screens/FacialRecognitionScreen';
 import { useSnackbar } from '@/components/common/Snackbar';
 import { HintRow } from '@/components/HintRow';
 import { GeneralButton } from '@/components/ui/buttons/GeneralButton';

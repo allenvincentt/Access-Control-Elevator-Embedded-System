@@ -53,10 +53,47 @@ from Google's `coco_ssd_mobilenet_v1_1.0_quant_2018_06_29.zip`, renamed. Verify 
 npm run verify-person-model
 ```
 
-To swap it, use any TFLite detection export that keeps the `TFLite_Detection_PostProcess`
-op in the graph. **Raw-anchor exports do not work** — MediaPipe's EfficientDet-Lite0, for
-example, emits `[1, 19206, 90]` logits and `[1, 19206, 4]` box regressions and expects the
-caller to decode anchors and run NMS, which this app does not do. The verifier catches that.
+The app accepts two kinds of model and picks the path from the file's outputs, with no
+setting to change. The verifier prints which path a file will take.
+
+| Path | Recognised by | Counts | Scopes |
+| --- | --- | --- | --- |
+| `ssd` | four outputs from `TFLite_Detection_PostProcess` | whole or partial bodies | `PERSON_SCOPES` |
+| `yolo`, one class | a single `[1, 5, N]` output | heads, seen overhead | `PERSON_SCOPE_HEAD` |
+| `yolo`, many classes | a single `[1, 4+classes, N]` output, e.g. stock COCO `yolo11n` | whole or partial bodies (class `0`) | `PERSON_SCOPES` |
+
+A stock COCO YOLO works untrained: `yolo export model=yolo11n.pt format=tflite imgsz=320`,
+then use the `_float16.tflite` file.
+
+Everything after decoding is shared: duplicate merging, group-box removal, scope gating,
+tracking, confirmation and reporting behave the same on both paths.
+
+**Raw-anchor exports do not work** — MediaPipe's EfficientDet-Lite0, for example, emits
+`[1, 19206, 90]` logits and `[1, 19206, 4]` box regressions and expects the caller to decode
+anchors, which this app does not do. The verifier catches that.
+
+### YOLO head detector
+
+Train an Ultralytics YOLO (YOLO11n or YOLOv8n) on overhead frames with heads labelled, and
+export it with `yolo export model=best.pt format=tflite imgsz=320` (add `int8=True` for
+int8 weights). Start with the `_float16.tflite` file. Whichever file you pick, run the
+verifier on it first: the output must be float32. A fully integer-quantised export has int8
+outputs, which the app cannot dequantise, and is rejected at load. Rename the chosen file to
+`person-detector.tflite` and rebuild.
+
+| Property | Value |
+| --- | --- |
+| Input shape | `1 x S x S x 3`, square, NHWC, RGB |
+| Input type | `float32` (`pixel / 255`), or `uint8` / `int8` |
+| Output | one float32 `[1, 4+classes, N]` tensor, box as `cx, cy, w, h` |
+| Box units | normalised or input pixels, detected per box |
+| Head class | channel `4 + HEAD_CLASS_INDEX` (`0` for a single-class model) |
+
+The raw candidates go through `nonMaxSuppression` at `yoloNmsIouThreshold` before the shared
+merge. `PERSON_SCOPE_HEAD` sets the head size, shape and confidence gates; retune it against
+real frames from the rig, since head size depends on camera height.
+
+### SSD person detector
 
 Required model contract (enforced at load by `src/services/person/model.ts`):
 
@@ -133,7 +170,11 @@ The knobs, all in `src/services/person/constants.ts`:
 | One person counted more than once | `nmsIouThreshold`, `containmentThreshold` | lower |
 | Two people standing close counted as one | `containmentThreshold`, `trackOverlapThreshold` | raise |
 | Furniture or fittings counted as people | `minScore` on both scopes | raise |
-| Someone at the back of the car missed | `minBoxHeight`, `minScore` on `PERSON_SCOPE_HALF` | lower |
+| Someone at the back of the car missed | `minBoxHeight`, `minScore` on `PERSON_SCOPE_OVERHEAD` | lower |
+| Two people side by side read as nobody (one box around both) | `groupSplitOverlap`, `groupMemberMinShare` | raise / lower |
+| A bending rider opens a second box | `trackCentreMatch` | raise |
+| A rider drops out when their score dips | `sustainScore` on the active scope | lower |
+| A moving head opens a second track | `trackCentreFloor`, `trackCentreMatch` | raise |
 | Count takes too long to settle | `trackConfirmFrames`, `stableFrames` | lower |
 | Count flickers while people move | `trackCountGrace`, `stableFrames` | raise |
 

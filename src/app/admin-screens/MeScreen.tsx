@@ -32,7 +32,7 @@ export function MeScreen() {
   const role = ROLE_COPY[profile.user_role];
 
   return (
-    <Screen header={<ScreenHeader overline="Account" title="Me" />}>
+    <Screen header={<ScreenHeader title="Me" />}>
       <Card padding="lg" elevated>
         <View style={styles.profile}>
           <Avatar name={profile.full_name} size={72} tone="brand" />

@@ -1,5 +1,9 @@
 export const PERSON_CLASS_INDEX = 0;
+export const HEAD_CLASS_INDEX = 0;
 export const PERSON_MAX_DETECTIONS = 25;
+
+export type PersonModelKind = 'ssd' | 'yolo';
+export type PersonTarget = 'person' | 'head';
 
 export type PersonRoi = {
   left: number;
@@ -20,6 +24,7 @@ export type PersonScopeAnchor = 'centre' | 'foot';
 export type PersonScope = {
   anchor: PersonScopeAnchor;
   minScore: number;
+  sustainScore: number;
   minBoxWidth: number;
   minBoxHeight: number;
   /**
@@ -45,6 +50,7 @@ export type PersonScope = {
 export const PERSON_SCOPE_HALF: PersonScope = {
   anchor: 'centre',
   minScore: 0.45,
+  sustainScore: 0.25,
   minBoxWidth: 0.035,
   minBoxHeight: 0.12,
   minAspect: 0.9,
@@ -60,6 +66,7 @@ export const PERSON_SCOPE_HALF: PersonScope = {
 export const PERSON_SCOPE_FULL: PersonScope = {
   anchor: 'foot',
   minScore: 0.4,
+  sustainScore: 0.25,
   minBoxWidth: 0.045,
   minBoxHeight: 0.28,
   minAspect: 0.9,
@@ -67,7 +74,41 @@ export const PERSON_SCOPE_FULL: PersonScope = {
   maxArea: 0.95,
 };
 
-export const PERSON_SCOPES: readonly PersonScope[] = [PERSON_SCOPE_HALF, PERSON_SCOPE_FULL];
+export const PERSON_ROI_OVERHEAD: PersonRoi = {
+  left: 0,
+  top: 0,
+  right: 1,
+  bottom: 1,
+};
+
+export const PERSON_SCOPE_OVERHEAD: PersonScope = {
+  anchor: 'centre',
+  minScore: 0.35,
+  sustainScore: 0.25,
+  minBoxWidth: 0.04,
+  minBoxHeight: 0.06,
+  minAspect: 0.33,
+  maxAspect: 3,
+  maxArea: 0.5,
+};
+
+export const PERSON_SCOPE_HEAD: PersonScope = {
+  anchor: 'centre',
+  minScore: 0.5,
+  sustainScore: 0.3,
+  minBoxWidth: 0.015,
+  minBoxHeight: 0.02,
+  minAspect: 0.5,
+  maxAspect: 2,
+  maxArea: 0.15,
+};
+
+export const PERSON_SCOPES: readonly PersonScope[] = [PERSON_SCOPE_OVERHEAD];
+
+export const PERSON_SCOPES_BY_TARGET: Record<PersonTarget, readonly PersonScope[]> = {
+  person: PERSON_SCOPES,
+  head: [PERSON_SCOPE_HEAD],
+};
 
 export const PERSON_DETECTION = {
   pollIntervalMs: 90,
@@ -84,18 +125,25 @@ export const PERSON_DETECTION = {
    */
   nmsIouThreshold: 0.45,
   /** Intersection over the smaller box. Catches a part nested inside a whole. */
-  containmentThreshold: 0.6,
+  containmentThreshold: 0.8,
   /** A merged box may not grow past this multiple of the box that absorbed it. */
   maxMergeGrowth: 1.6,
 
+  groupMemberMinShare: 0.2,
+  groupSplitOverlap: 0.3,
+
+  yoloNmsIouThreshold: 0.5,
+
   iouMatchThreshold: 0.25,
+  trackCentreMatch: 0.6,
+  trackCentreFloor: 0.06,
   /** Consecutive frames a new box must survive before it counts as a person. */
-  trackConfirmFrames: 2,
+  trackConfirmFrames: 3,
   trackMissLimit: 6,
   /** A confirmed track keeps counting through this many missed frames. */
   trackCountGrace: 2,
   /** Two confirmed tracks overlapping this much (over the smaller) are one person. */
-  trackOverlapThreshold: 0.55,
+  trackOverlapThreshold: 0.8,
   stableFrames: 3,
   detectorFailureLimit: 6,
   reportRetryMs: 1200,
@@ -150,7 +198,7 @@ export const PERSON_MODEL_FAILURE_MESSAGES: Record<
   PERSON_MODEL_UNSUPPORTED: {
     title: 'Model shape not recognised',
     admin:
-      'The model loaded but its tensors do not match the TFLite detection contract (one [1,N,4] box tensor, two [1,N] tensors and a scalar count). Use an SSD MobileNet V2 or EfficientDet-Lite export.',
+      'The model loaded but its tensors match neither supported contract: an SSD-style export with TFLite_Detection_PostProcess (one [1,N,4] box tensor, two [1,N] tensors and a scalar count), or a YOLO export with a single float32 [1,4+classes,N] output. Run "npm run verify-person-model" on the file.',
     user: 'This device could not start person detection. Ask facilities to check the installation.',
   },
 };

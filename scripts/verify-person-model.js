@@ -117,12 +117,18 @@ function inspect(modelPath) {
     console.log(`input  ${i}: [${shape}] ${dtype}`);
     if (i > 0) continue;
 
-    if (shape.length !== 4 || shape[3] !== 3) {
-      problems.push(`input shape is [${shape}], expected [1, size, size, 3]`);
-    } else if (shape[1] !== shape[2] || shape[1] <= 0) {
-      problems.push(`input must be square, got ${shape[2]}x${shape[1]}`);
+    const channelsFirst = shape.length === 4 && shape[1] === 3 && shape[3] !== 3;
+    const height = channelsFirst ? shape[2] : shape[1];
+    const width = channelsFirst ? shape[3] : shape[2];
+
+    if (shape.length !== 4 || (!channelsFirst && shape[3] !== 3)) {
+      problems.push(`input shape is [${shape}], expected [1, size, size, 3] or [1, 3, size, size]`);
+    } else if (height !== width || height <= 0) {
+      problems.push(`input must be square, got ${width}x${height}`);
     } else {
-      console.log(`       input size resolves to ${shape[1]}`);
+      console.log(
+        `       input size resolves to ${height}, ${channelsFirst ? 'channels-first' : 'channels-last'}`,
+      );
     }
 
     if (dtype !== 'uint8' && dtype !== 'int8' && dtype !== 'float32') {
@@ -134,10 +140,12 @@ function inspect(modelPath) {
   let count = -1;
   const pair = [];
   let undeclared = 0;
+  const described = [];
 
   for (let i = 0; i < outputs.count; i += 1) {
     const index = data.readInt32LE(outputs.start + i * 4);
     const { shape, dtype } = describeTensor(data, reader, tensors.start, index);
+    described.push({ shape, dtype });
     console.log(`output ${i}: [${shape}] ${dtype}`);
 
     if (shape.length === 0) {
@@ -151,14 +159,35 @@ function inspect(modelPath) {
     }
   }
 
+  if (described.length === 1 && described[0].shape.length === 3) {
+    const [, first, second] = described[0].shape;
+    const channelsFirst = first < second;
+    const channels = channelsFirst ? first : second;
+    const anchors = channelsFirst ? second : first;
+    if (channels >= 5 && anchors > 0) {
+      console.log('');
+      console.log(
+        `path:  yolo (${channels === 5 ? 'head detector' : 'person detector, class 0'}), ${channels - 4} class(es), ${anchors} candidates, ${channelsFirst ? 'channels-first' : 'channels-last'}`,
+      );
+      if (described[0].dtype !== 'float32') {
+        problems.push(
+          `YOLO output is ${described[0].dtype}; export with float32 outputs (float16 or int8 weights are fine)`,
+        );
+      }
+      return problems;
+    }
+  }
+
   if (boxes >= 0 && count >= 0 && pair.length === 2) {
     console.log('');
+    console.log('path:  ssd (person detector)');
     console.log(`plan:  boxes=${boxes} count=${count} scores/classes=${pair[0]},${pair[1]}`);
     return problems;
   }
 
   if (undeclared === 4 && outputs.count === 4) {
     console.log('');
+    console.log('path:  ssd (person detector)');
     console.log('note:  all four output shapes are dynamic, which is the normal signature for');
     console.log('       TFLite_Detection_PostProcess. They resolve when the interpreter');
     console.log('       allocates tensors, and the loader falls back to the conventional');

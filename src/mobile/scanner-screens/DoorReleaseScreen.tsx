@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import type { VerificationSession } from '@/app/auth/scanner-screens/ScannerFlow';
+import type { VerificationSession } from '@/mobile/scanner-screens/ScannerFlow';
 import { HintRow } from '@/components/HintRow';
 import { ScannerScaffold } from '@/components/scanner/ScannerScaffold';
 import { GeneralButton } from '@/components/ui/buttons/GeneralButton';

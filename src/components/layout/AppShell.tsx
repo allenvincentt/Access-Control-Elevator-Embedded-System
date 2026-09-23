@@ -24,8 +24,8 @@ import {
   StaffCreateEditModal,
   type StaffDraft,
   type StaffEditPatch,
-} from '@/app/auth/StaffCreateEditModal';
-import { FaceEnrollmentScreen } from '@/app/auth/scanner-screens/FaceEnrollmentScreen';
+} from '@/mobile/StaffCreateEditModal';
+import { FaceEnrollmentScreen } from '@/mobile/scanner-screens/FaceEnrollmentScreen';
 
 type StaffModalState = { mode: 'create' } | { mode: 'edit'; member: StaffRow } | null;
 
