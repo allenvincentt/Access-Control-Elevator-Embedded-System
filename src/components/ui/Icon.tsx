@@ -46,6 +46,11 @@ export const GLYPHS = {
   flipCamera: 'cameraswitch',
   torch: 'flashlight_on',
   torchOff: 'flashlight_off',
+  record: 'fiber_manual_record',
+  stop: 'stop',
+  play: 'play_arrow',
+  share: 'share',
+  remove: 'remove',
 
   activity: 'monitoring',
   trendUp: 'trending_up',

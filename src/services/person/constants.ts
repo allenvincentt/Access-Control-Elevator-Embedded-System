@@ -156,3 +156,25 @@ export const PERSON_MODEL_FAILURE_MESSAGES: Record<
 };
 
 export type PersonCountCode = 'Starting' | 'Counting' | 'Settled' | 'DetectorUnavailable';
+
+export const PERSON_CLIP_TAGS = [
+  { key: 'occluded', label: 'Partly hidden' },
+  { key: 'child-front', label: 'Child in front' },
+  { key: 'carried-child', label: 'Carried child' },
+  { key: 'near-camera', label: 'Near camera' },
+  { key: 'seated', label: 'Seated' },
+  { key: 'bags', label: 'Bags or trolley' },
+  { key: 'bright', label: 'Bright' },
+  { key: 'dim', label: 'Dim' },
+  { key: 'backlit', label: 'Backlit' },
+  { key: 'reflection', label: 'Reflection' },
+] as const;
+
+export type PersonClipTag = (typeof PERSON_CLIP_TAGS)[number]['key'];
+
+export const PERSON_CLIP_MAX_COUNT = 20;
+
+export type ClipLabel = {
+  count: number;
+  tags: PersonClipTag[];
+};

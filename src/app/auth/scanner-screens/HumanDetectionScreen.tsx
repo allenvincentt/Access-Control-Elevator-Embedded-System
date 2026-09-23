@@ -1,8 +1,15 @@
 import { CameraView } from "expo-camera";
 import * as ScreenOrientation from "expo-screen-orientation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   AppState,
+  Pressable,
   StyleSheet,
   Text,
   useWindowDimensions,
@@ -19,6 +26,7 @@ import Svg, { Rect } from "react-native-svg";
 import { useSnackbar } from "@/components/common/Snackbar";
 import { HintRow } from "@/components/HintRow";
 import { CameraPermissionGate } from "@/components/scanner/CameraPermissionGate";
+import { ClipLabelEditor } from "@/components/scanner/ClipLabelEditor";
 import { ScannerScaffold } from "@/components/scanner/ScannerScaffold";
 import { GeneralButton } from "@/components/ui/buttons/GeneralButton";
 import { Icon, type IconName } from "@/components/ui/Icon";
@@ -39,7 +47,12 @@ import {
   PERSON_ROI_WIDE,
   PERSON_SCOPE_FULL,
   PERSON_SCOPES,
+  type ClipLabel,
 } from "@/services/person/constants";
+import {
+  ClipRecorder,
+  PERSON_DATASET_ENABLED,
+} from "@/services/person/dataset";
 import {
   detectPeople,
   discardFile,
@@ -58,12 +71,14 @@ import { refreshBoarding, watchBoardingOnly } from "@/services/rideSession";
 
 export type HumanDetectionScreenProps = {
   onExit: () => void;
+  onOpenReplay?: () => void;
 };
 
 type Frame = {
   uri: string;
   width: number;
   height: number;
+  capturedAt: number;
 };
 
 type OverlayBox = {
@@ -81,7 +96,10 @@ const PANEL_MAX_WIDTH = 380;
 
 const AnimatedRect = Animated.createAnimatedComponent(Rect);
 
-export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
+export function HumanDetectionScreen({
+  onExit,
+  onOpenReplay,
+}: HumanDetectionScreenProps) {
   const snackbar = useSnackbar();
   const { width: viewWidth, height: viewHeight } = useWindowDimensions();
   const ride = useRideSession();
@@ -100,6 +118,7 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
   const reportedAt = useRef(0);
   const detectorMisses = useRef(0);
   const lastFrameAt = useRef(0);
+  const recorderRef = useRef<ClipRecorder | null>(null);
 
   const [cameraReady, setCameraReady] = useState(false);
   const [appActive, setAppActive] = useState(true);
@@ -115,8 +134,52 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
     height: number;
   } | null>(null);
   const [fault, setFault] = useState<string | null>(null);
+  const [datasetOpen, setDatasetOpen] = useState(false);
+  const [clipLabel, setClipLabel] = useState<ClipLabel>({
+    count: 0,
+    tags: [],
+  });
+  const [recordedFrames, setRecordedFrames] = useState<number | null>(null);
+  const recording = recordedFrames !== null;
 
   useRideNarration(boarding, true);
+
+  const stopRecording = useCallback(() => {
+    const recorder = recorderRef.current;
+    recorderRef.current = null;
+    setRecordedFrames(null);
+    if (!recorder) return;
+    let saved;
+    try {
+      saved = recorder.finish();
+    } catch (error) {
+      if (mounted.current) {
+        snackbar.show(errorMessage(error, "The clip could not be saved."), {
+          variant: "error",
+        });
+      }
+      return;
+    }
+    if (!mounted.current) return;
+    snackbar.show(
+      saved
+        ? `Clip saved with ${saved.manifest.frames.length} frames.`
+        : "No frames were captured, so nothing was saved.",
+      { variant: saved ? "success" : "info" },
+    );
+  }, [snackbar]);
+
+  const startRecording = useCallback(() => {
+    if (recorderRef.current) return;
+    try {
+      recorderRef.current = new ClipRecorder(clipLabel);
+      setRecordedFrames(0);
+    } catch (error) {
+      snackbar.show(errorMessage(error, "The clip could not be started."), {
+        variant: "error",
+      });
+    }
+  }, [clipLabel, snackbar]);
 
   useEffect(() => {
     phaseRef.current = boarding?.phase ?? "idle";
@@ -131,6 +194,13 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
     });
     return () => {
       mounted.current = false;
+      const recorder = recorderRef.current;
+      recorderRef.current = null;
+      try {
+        recorder?.finish();
+      } catch {
+        return;
+      }
     };
   }, []);
 
@@ -157,10 +227,13 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (state) => {
       setAppActive(state === "active");
-      if (state !== "active") tracker.current.reset();
+      if (state !== "active") {
+        tracker.current.reset();
+        stopRecording();
+      }
     });
     return () => subscription.remove();
-  }, []);
+  }, [stopRecording]);
 
   const capture = useCallback(async (): Promise<Frame | null> => {
     const camera = cameraRef.current;
@@ -173,7 +246,12 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
         exif: false,
       });
       return photo?.uri && photo.width && photo.height
-        ? { uri: photo.uri, width: photo.width, height: photo.height }
+        ? {
+            uri: photo.uri,
+            width: photo.width,
+            height: photo.height,
+            capturedAt: Date.now(),
+          }
         : null;
     } catch {
       return null;
@@ -195,12 +273,29 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
         timer = setTimeout(resolve, ms);
       });
 
+    const settleFrame = async (frame: Frame) => {
+      const recorder = recorderRef.current;
+      if (!recorder) {
+        discardFile(frame.uri);
+        return;
+      }
+      try {
+        await recorder.add(frame);
+        if (mounted.current && recorderRef.current === recorder) {
+          setRecordedFrames(recorder.frameCount);
+        }
+      } catch {
+        discardFile(frame.uri);
+      }
+    };
+
     const loop = async () => {
       while (!cancelled) {
         const counting = phaseRef.current === "counting";
-        const interval = counting
-          ? PERSON_DETECTION.pollIntervalMs
-          : PERSON_DETECTION.idlePollIntervalMs;
+        const interval =
+          counting || recorderRef.current
+            ? PERSON_DETECTION.pollIntervalMs
+            : PERSON_DETECTION.idlePollIntervalMs;
 
         if (counting !== trackingRef.current) {
           trackingRef.current = counting;
@@ -231,7 +326,7 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
           }
           break;
         }
-        discardFile(frame.uri);
+        await settleFrame(frame);
         if (cancelled || !mounted.current) break;
 
         if (!outcome.ok) {
@@ -311,6 +406,64 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
     viewHeight,
   );
   const wide = viewWidth > viewHeight;
+
+  const datasetToggle = PERSON_DATASET_ENABLED ? (
+    <DatasetToggle
+      recordedFrames={recordedFrames}
+      onPress={() => setDatasetOpen(true)}
+    />
+  ) : null;
+
+  const datasetPanel = (
+    <>
+      <PanelHead
+        icon="camera"
+        color={colors.primary}
+        title="Dataset capture"
+        accessory={
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close dataset capture"
+            hitSlop={8}
+            onPress={() => setDatasetOpen(false)}
+            style={({ pressed }) => [
+              styles.headAction,
+              pressed && styles.headActionPressed,
+            ]}
+          >
+            <Icon name="close" size={16} color={colors.textSecondary} />
+          </Pressable>
+        }
+      />
+      <ClipLabelEditor
+        label={clipLabel}
+        onChange={setClipLabel}
+        disabled={recording}
+      />
+      <View style={styles.datasetActions}>
+        <GeneralButton
+          size="sm"
+          label={recording ? `Stop · ${recordedFrames} frames` : "Record clip"}
+          icon={recording ? "stop" : "record"}
+          variant={recording ? "danger" : "primary"}
+          disabled={!recording && !monitoring}
+          onPress={recording ? stopRecording : startRecording}
+          fullWidth
+          style={styles.datasetPrimary}
+        />
+        {onOpenReplay ? (
+          <GeneralButton
+            size="sm"
+            label="Replay"
+            icon="play"
+            variant="outline"
+            disabled={recording}
+            onPress={onOpenReplay}
+          />
+        ) : null}
+      </View>
+    </>
+  );
 
   if (model && !model.ready) {
     const copy = PERSON_MODEL_FAILURE_MESSAGES[model.failure];
@@ -399,12 +552,15 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
           </>
         }
         panel={
-          fault || linkFault ? (
+          datasetOpen && PERSON_DATASET_ENABLED ? (
+            datasetPanel
+          ) : fault || linkFault ? (
             <>
               <PanelHead
                 icon="error"
                 color={colors.danger}
                 title={fault ? "Detector stopped" : "Controller not reporting"}
+                accessory={datasetToggle}
               />
               <HintRow tone="danger" title="Why">
                 {fault ?? linkFault}
@@ -432,6 +588,7 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
                 icon={matches ? "checkCircle" : "person"}
                 color={matches ? colors.success : colors.primary}
                 title={matches ? "Occupancy matches" : "Counting…"}
+                accessory={datasetToggle}
               />
               <View style={styles.tally}>
                 <Tally label="Verified" value={expected} tone={colors.text} />
@@ -458,6 +615,7 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
                 icon="elevator"
                 color={colors.primary}
                 title={idleTitle(boarding?.phase)}
+                accessory={datasetToggle}
               />
               <Text style={styles.body}>
                 {idleBody(boarding?.phase, expected)}
@@ -512,16 +670,60 @@ function PanelHead({
   icon,
   color,
   title,
+  accessory,
 }: {
   icon: IconName;
   color: string;
   title: string;
+  accessory?: ReactNode;
 }) {
   return (
     <View style={styles.head}>
       <Icon name={icon} size={20} color={color} />
       <Text style={styles.title}>{title}</Text>
+      {accessory}
     </View>
+  );
+}
+
+function DatasetToggle({
+  recordedFrames,
+  onPress,
+}: {
+  recordedFrames: number | null;
+  onPress: () => void;
+}) {
+  const recording = recordedFrames !== null;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={
+        recording
+          ? `Dataset capture, recording, ${recordedFrames} frames`
+          : "Open dataset capture"
+      }
+      hitSlop={8}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.datasetToggle,
+        recording && styles.datasetToggleRecording,
+        pressed && styles.headActionPressed,
+      ]}
+    >
+      <Icon
+        name={recording ? "record" : "camera"}
+        size={14}
+        color={recording ? colors.danger : colors.textSecondary}
+      />
+      <Text
+        style={[
+          styles.datasetToggleText,
+          recording && styles.datasetToggleTextRecording,
+        ]}
+      >
+        {recording ? `REC ${recordedFrames}` : "Dataset"}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -593,8 +795,51 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   title: {
+    flex: 1,
     color: colors.text,
     ...typography.subheading,
+  },
+  headAction: {
+    width: 30,
+    height: 30,
+    borderRadius: radius.pill,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.surfaceSunken,
+  },
+  headActionPressed: {
+    transform: [{ scale: 0.94 }],
+    opacity: 0.8,
+  },
+  datasetToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceSunken,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  datasetToggleRecording: {
+    backgroundColor: colors.dangerTint,
+    borderColor: "transparent",
+  },
+  datasetToggleText: {
+    color: colors.textSecondary,
+    ...typography.caption,
+    fontVariant: ["tabular-nums"],
+  },
+  datasetToggleTextRecording: {
+    color: colors.danger,
+  },
+  datasetActions: {
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  datasetPrimary: {
+    flex: 1,
   },
   body: {
     color: colors.textSecondary,
