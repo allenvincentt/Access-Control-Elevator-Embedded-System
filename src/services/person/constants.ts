@@ -133,6 +133,7 @@ export const PERSON_DETECTION = {
   groupSplitOverlap: 0.3,
 
   yoloNmsIouThreshold: 0.5,
+  yoloDuplicateIou: 0.6,
 
   iouMatchThreshold: 0.25,
   trackCentreMatch: 0.6,

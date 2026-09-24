@@ -241,7 +241,7 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
         }
 
         detectorMisses.current = 0;
-        const next = tracker.current.push(outcome.boxes);
+        const next = tracker.current.push(outcome.boxes, outcome.stats.kind);
         const now = Date.now();
         const gap =
           lastFrameAt.current > 0

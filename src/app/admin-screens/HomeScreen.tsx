@@ -821,7 +821,6 @@ function KpiGrid({
             value={grantedRate}
             decimals={1}
             suffix="%"
-            delay={70}
             style={styles.kpiValue}
           />
         }
@@ -840,11 +839,7 @@ function KpiGrid({
         style={item}
         accessibilityLabel={`${overview.needs_review_today} denials flagged for review`}
         value={
-          <CountUp
-            value={overview.needs_review_today}
-            delay={140}
-            style={styles.kpiValue}
-          />
+          <CountUp value={overview.needs_review_today} style={styles.kpiValue} />
         }
         caption={
           <KpiCaption
@@ -873,7 +868,7 @@ function KpiGrid({
           lockouts == null ? (
             <Text style={[styles.kpiValue, styles.kpiValueMuted]}>—</Text>
           ) : (
-            <CountUp value={lockouts} delay={210} style={styles.kpiValue} />
+            <CountUp value={lockouts} style={styles.kpiValue} />
           )
         }
         caption={
@@ -959,7 +954,6 @@ function GrantedVsDeniedPanel({
                 value={rate}
                 decimals={0}
                 suffix="%"
-                delay={250}
                 style={styles.donutValue}
               />
               <Text style={styles.donutCaption}>granted</Text>
@@ -1067,7 +1061,7 @@ function SplitStat({
         <Text style={styles.splitStatLabel}>{label}</Text>
       </View>
       <View style={styles.splitStatRow}>
-        <CountUp value={value} delay={250} style={styles.splitStatValue} />
+        <CountUp value={value} style={styles.splitStatValue} />
         <Text style={[styles.splitStatShare, { color: meta.fg }]}>
           {`${share.toFixed(0)}%`}
         </Text>
@@ -1119,7 +1113,6 @@ function DenialReasonsPanel({
               count={entry.count}
               share={percent(entry.count, total)}
               lead={index === 0}
-              delay={320 + index * 60}
             />
           ))}
         </View>
@@ -1133,13 +1126,11 @@ function ReasonTile({
   count,
   share,
   lead,
-  delay,
 }: {
   reason: DenialReason;
   count: number;
   share: number;
   lead: boolean;
-  delay: number;
 }) {
   const { animatedStyle, handlers } = useInteraction({
     hoverLift: 3,
@@ -1166,7 +1157,7 @@ function ReasonTile({
           {`${share.toFixed(0)}%`}
         </Text>
       </View>
-      <CountUp value={count} delay={delay} style={styles.reasonCount} />
+      <CountUp value={count} style={styles.reasonCount} />
       <Text style={styles.reasonLabel} numberOfLines={2}>
         {DENIAL_LABELS[reason]}
       </Text>
@@ -1309,11 +1300,7 @@ function MostActivePanel({
               </Text>
             </View>
             <View style={styles.leaderScore}>
-              <CountUp
-                value={leader.attempts}
-                delay={410}
-                style={styles.leaderCount}
-              />
+              <CountUp value={leader.attempts} style={styles.leaderCount} />
               <Text style={styles.leaderUnit}>
                 {leader.attempts === 1 ? "attempt" : "attempts"}
               </Text>

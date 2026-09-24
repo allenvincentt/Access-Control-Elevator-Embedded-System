@@ -1,4 +1,4 @@
-import { PERSON_DETECTION } from '@/services/person/constants';
+import { PERSON_DETECTION, type PersonModelKind } from '@/services/person/constants';
 import type { PersonBox } from '@/services/person/detector';
 import {
   intersectionOverSmaller,
@@ -73,6 +73,7 @@ export class PersonTracker {
   private nextId = 1;
   private lastCount = -1;
   private steadyFrames = 0;
+  private kind: PersonModelKind = 'ssd';
 
   reset() {
     this.tracks = [];
@@ -80,7 +81,8 @@ export class PersonTracker {
     this.steadyFrames = 0;
   }
 
-  push(boxes: PersonBox[]): TrackedCount {
+  push(boxes: PersonBox[], kind: PersonModelKind = 'ssd'): TrackedCount {
+    this.kind = kind;
     const candidates = boxes.filter((box) => box.inRoi);
 
     const matchedTracks = new Set<number>();
@@ -137,10 +139,7 @@ export class PersonTracker {
       // a torso box nested in a whole-body box scores well below the match
       // threshold, so without this check a person turning sideways opens a second
       // track while the first is still running.
-      const fragment = this.tracks.some(
-        (track) =>
-          intersectionOverSmaller(track.box, candidate) >= PERSON_DETECTION.trackOverlapThreshold,
-      );
+      const fragment = this.tracks.some((track) => this.sameArea(track.box, candidate));
       if (fragment) continue;
 
       this.tracks.push({
@@ -186,6 +185,13 @@ export class PersonTracker {
     };
   }
 
+  private sameArea(a: Rect, b: Rect): boolean {
+    if (this.kind === 'yolo') {
+      return intersectionOverUnion(a, b) >= PERSON_DETECTION.yoloDuplicateIou;
+    }
+    return intersectionOverSmaller(a, b) >= PERSON_DETECTION.trackOverlapThreshold;
+  }
+
   /**
    * Drops a track that has drifted onto the same person as a longer-lived one.
    * Frame-level suppression cannot catch this on its own, because a split that
@@ -200,10 +206,7 @@ export class PersonTracker {
     const survivors: PersonTrack[] = [];
 
     for (const track of ordered) {
-      const duplicate = survivors.some(
-        (kept) =>
-          intersectionOverSmaller(kept.box, track.box) >= PERSON_DETECTION.trackOverlapThreshold,
-      );
+      const duplicate = survivors.some((kept) => this.sameArea(kept.box, track.box));
       if (!duplicate) survivors.push(track);
     }
 
