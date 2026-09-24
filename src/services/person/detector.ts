@@ -615,7 +615,7 @@ export async function detectPeople(
 
   // Merge before testing against the region, so the shape gates and the foot
   // anchor are applied to a whole person rather than to each fragment of one.
-  const boxes = suppressDuplicates(decoded.candidates);
+  const boxes = kind === 'yolo' ? decoded.candidates : suppressDuplicates(decoded.candidates);
   const frameAspect = frame.height > 0 ? frame.width / frame.height : 0;
   let accepted = 0;
 

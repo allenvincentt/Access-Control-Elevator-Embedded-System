@@ -18,7 +18,7 @@ import Animated, {
   type SharedValue,
 } from 'react-native-reanimated';
 
-import { useRevealOpen } from '@/components/common/animations/RevealGate';
+import { useRevealHold, useRevealOpen } from '@/components/common/animations/RevealGate';
 import { createGradientStyle } from '@/constants/glassTheme';
 import { colors, fontFamily, palette, radius, typography } from '@/constants/themeColor';
 
@@ -86,12 +86,18 @@ export function BarChart({
   const [hovered, setHovered] = useState<number | null>(null);
   const [pinned, setPinned] = useState<number | null>(null);
   const progress = useSharedValue(0);
+  const [grown, setGrown] = useState(false);
   const open = useRevealOpen();
+  useRevealHold(!grown);
 
   useEffect(() => {
     if (!open) return;
     progress.value = withDelay(animationDelay, withTiming(1, GROW));
-    return () => cancelAnimation(progress);
+    const timeout = setTimeout(() => setGrown(true), animationDelay + GROW.duration);
+    return () => {
+      clearTimeout(timeout);
+      cancelAnimation(progress);
+    };
   }, [open, animationDelay, progress]);
 
   const fallback = defaultIndex ?? Math.max(bars.length - 1, 0);

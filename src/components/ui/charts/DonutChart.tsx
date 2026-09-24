@@ -10,7 +10,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import Svg, { Circle, G } from 'react-native-svg';
 
-import { useRevealOpen } from '@/components/common/animations/RevealGate';
+import { useRevealHold, useRevealOpen } from '@/components/common/animations/RevealGate';
 import { colors } from '@/constants/themeColor';
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
@@ -66,7 +66,15 @@ export function DonutChart({
   const target = Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
   const swept = useSharedValue(animate ? 0 : target);
   const [webArmed, setWebArmed] = useState(!animate);
+  const [drawn, setDrawn] = useState(!animate);
   const open = useRevealOpen();
+  useRevealHold(!drawn);
+
+  useEffect(() => {
+    if (drawn || !open) return;
+    const timeout = setTimeout(() => setDrawn(true), animationDelay + SWEEP.duration);
+    return () => clearTimeout(timeout);
+  }, [drawn, open, animationDelay]);
 
   useEffect(() => {
     if (animate && !open) return;

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Text, type StyleProp, type TextStyle } from 'react-native';
 
-import { useRevealOpen } from './RevealGate';
+import { useRevealSettled } from './RevealGate';
 
 export type CountUpProps = {
   value: number;
@@ -79,11 +79,11 @@ export function CountUp({
   style,
   numberOfLines,
 }: CountUpProps) {
-  const open = useRevealOpen();
+  const settled = useRevealSettled();
   const [display, setDisplay] = useState(0);
 
   useEffect(() => {
-    if (!open) return;
+    if (!settled) return;
     return register({
       startAt: performance.now() + delay,
       duration: Math.max(duration, 1),
@@ -92,7 +92,7 @@ export function CountUp({
       shown: Number.NaN,
       set: setDisplay,
     });
-  }, [open, value, duration, delay, decimals]);
+  }, [settled, value, duration, delay, decimals]);
 
   return (
     <Text style={style} numberOfLines={numberOfLines} allowFontScaling={false}>

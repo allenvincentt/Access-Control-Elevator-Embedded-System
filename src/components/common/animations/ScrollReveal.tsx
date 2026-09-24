@@ -9,7 +9,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
-import { useRevealOpen } from './RevealGate';
+import { RevealSettled, useRevealHold, useRevealOpen } from './RevealGate';
 
 export type ScrollRevealProps = {
   children: ReactNode;
@@ -24,6 +24,7 @@ export type ScrollRevealProps = {
 const REVEAL_DURATION = 980;
 const REVEAL_DISTANCE = 44;
 const REVEAL_SCALE_FROM = 0.985;
+const REVEAL_SETTLE = 0.45;
 
 export function ScrollReveal({
   children,
@@ -35,8 +36,10 @@ export function ScrollReveal({
   onLayout,
 }: ScrollRevealProps) {
   const [played, setPlayed] = useState(!enabled);
+  const [entered, setEntered] = useState(!enabled);
   const progress = useSharedValue(enabled ? 0 : 1);
   const open = useRevealOpen();
+  useRevealHold(enabled && !played);
 
   useEffect(() => {
     if (!enabled || played) {
@@ -48,8 +51,10 @@ export function ScrollReveal({
       delay,
       withTiming(1, { duration, easing: Easing.out(Easing.cubic) }),
     );
+    const enter = setTimeout(() => setEntered(true), delay + duration * REVEAL_SETTLE);
     const timeout = setTimeout(() => setPlayed(true), delay + duration);
     return () => {
+      clearTimeout(enter);
       clearTimeout(timeout);
       cancelAnimation(progress);
     };
@@ -64,8 +69,13 @@ export function ScrollReveal({
   }));
 
   return (
-    <Animated.View style={[animatedStyle, style]} onLayout={onLayout}>
-      {children}
+    <Animated.View
+      style={[animatedStyle, style]}
+      onLayout={onLayout}
+      needsOffscreenAlphaCompositing={!played}
+      renderToHardwareTextureAndroid={!played}
+    >
+      <RevealSettled settled={entered || played}>{children}</RevealSettled>
     </Animated.View>
   );
 }
