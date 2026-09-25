@@ -564,7 +564,7 @@ function decodeYolo(
   }
 
   return {
-    candidates: nonMaxSuppression(passed, PERSON_DETECTION.yoloNmsIouThreshold),
+    candidates: nonMaxSuppression(dropGroupBoxes(passed), PERSON_DETECTION.yoloNmsIouThreshold),
     reported: passed.length,
     scanned,
     topScore,

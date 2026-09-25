@@ -17,16 +17,6 @@ APK — replacing a file requires a full rebuild, reloading Metro is not enough.
 `mobilefacenet.tflite` in this folder is a **placeholder**. Replace it with a real
 MobileFaceNet TensorFlow Lite model before face enrollment or verification will work.
 
-Required model contract (enforced at runtime by `src/services/face/embedder.ts`):
-
-Analyze these photos and identify/fix without training.
-
-First problem:
-C:\Users\allen\Downloads\b68306f5-ac9f-46ef-82df-17c1a929bde4.jpg, the Human Detection counts two people but the ESP32 or the hardware did not go to the selected floor.
-
-Second problem:
-C:\Users\allen\Downloads\43226bc3-745b-4d31-9ce0-fa1fa17cd6bb.jpg, the second try after the first try failed, this time the two people got even more closer but this time it failed again since they are counted as
-
 | Property            | Value                                          |
 | ------------------- | ---------------------------------------------- |
 | Input shape         | `1 x 112 x 112 x 3`, float32, NHWC, RGB        |
@@ -195,7 +185,7 @@ box inside a body box. YOLO does not, and from overhead a standing person's box 
 covers the person bending beside them, so those rules merged two real people into one.
 Duplicates are judged by IoU at `yoloDuplicateIou` instead.
 | Count takes too long to settle | `trackConfirmFrames`, `stableFrames` | lower |
-| Count flickers while people move | `trackCountGrace`, `stableFrames` | raise |
+| Count flickers while people move | `trackCountGraceMs`, `trackReacquireCentre` | raise |
 
 Confidence is the only lever that separates a person from an upright, person-sized object,
 so a fitting that scores above `minScore` on frame after frame cannot be tuned out here.

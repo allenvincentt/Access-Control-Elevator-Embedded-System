@@ -12,6 +12,7 @@ export type PersonTrack = {
   view: Rect;
   hits: number;
   misses: number;
+  seenAt: number;
   confirmed: boolean;
 };
 
@@ -51,15 +52,17 @@ function centreDistance(track: Rect, candidate: Rect): number {
   return Math.hypot(dx, dy);
 }
 
-function affinity(track: Rect, candidate: Rect): number {
-  const overlap = intersectionOverUnion(track, candidate);
+function affinity(track: PersonTrack, candidate: Rect): number {
+  const overlap = intersectionOverUnion(track.box, candidate);
   if (overlap >= PERSON_DETECTION.iouMatchThreshold) return overlap;
 
-  const distance = centreDistance(track, candidate);
-  if (distance >= PERSON_DETECTION.trackCentreMatch) return 0;
-  return (
-    PERSON_DETECTION.iouMatchThreshold * 0.99 * (1 - distance / PERSON_DETECTION.trackCentreMatch)
-  );
+  const radius =
+    track.confirmed && track.misses > 0
+      ? PERSON_DETECTION.trackReacquireCentre
+      : PERSON_DETECTION.trackCentreMatch;
+  const distance = centreDistance(track.box, candidate);
+  if (distance >= radius) return 0;
+  return PERSON_DETECTION.iouMatchThreshold * 0.99 * (1 - distance / radius);
 }
 
 type Pairing = {
@@ -81,7 +84,13 @@ export class PersonTracker {
     this.steadyFrames = 0;
   }
 
-  push(boxes: PersonBox[], kind: PersonModelKind = 'ssd'): TrackedCount {
+  keepLive() {
+    this.tracks = this.tracks.filter((track) => track.misses === 0);
+    this.lastCount = -1;
+    this.steadyFrames = 0;
+  }
+
+  push(boxes: PersonBox[], kind: PersonModelKind = 'ssd', now = Date.now()): TrackedCount {
     this.kind = kind;
     const candidates = boxes.filter((box) => box.inRoi);
 
@@ -96,7 +105,7 @@ export class PersonTracker {
     const pairings: Pairing[] = [];
     for (let track = 0; track < this.tracks.length; track += 1) {
       for (let candidate = 0; candidate < candidates.length; candidate += 1) {
-        const overlap = affinity(this.tracks[track].box, candidates[candidate]);
+        const overlap = affinity(this.tracks[track], candidates[candidate]);
         if (overlap > 0) {
           pairings.push({ track, candidate, overlap });
         }
@@ -116,6 +125,7 @@ export class PersonTracker {
       track.view = follow(track.view, track.box.fit);
       track.hits += 1;
       track.misses = 0;
+      track.seenAt = now;
       track.confirmed = track.hits >= PERSON_DETECTION.trackConfirmFrames;
     }
 
@@ -125,7 +135,7 @@ export class PersonTracker {
 
     this.tracks = this.tracks.filter((track) =>
       track.confirmed
-        ? track.misses <= PERSON_DETECTION.trackMissLimit
+        ? now - track.seenAt <= PERSON_DETECTION.trackForgetMs
         : track.misses === 0,
     );
 
@@ -148,6 +158,7 @@ export class PersonTracker {
         view: { ...candidate.fit },
         hits: 1,
         misses: 0,
+        seenAt: now,
         confirmed: PERSON_DETECTION.trackConfirmFrames <= 1,
       });
       this.nextId += 1;
@@ -161,7 +172,7 @@ export class PersonTracker {
     // the instant one frame fails to find it made the count sag and recover
     // constantly while somebody moved, so it never settled.
     const counted = this.tracks.filter(
-      (track) => track.confirmed && track.misses <= PERSON_DETECTION.trackCountGrace,
+      (track) => track.confirmed && now - track.seenAt <= PERSON_DETECTION.trackCountGraceMs,
     );
     const count = counted.length;
 
@@ -180,7 +191,7 @@ export class PersonTracker {
       visible: this.tracks.filter(
         (track) =>
           track.misses === 0 ||
-          (track.confirmed && track.misses <= PERSON_DETECTION.trackCountGrace),
+          (track.confirmed && now - track.seenAt <= PERSON_DETECTION.trackCountGraceMs),
       ),
     };
   }
@@ -206,7 +217,9 @@ export class PersonTracker {
     const survivors: PersonTrack[] = [];
 
     for (const track of ordered) {
-      const duplicate = survivors.some((kept) => this.sameArea(kept.box, track.box));
+      const duplicate =
+        track.misses === 0 &&
+        survivors.some((kept) => kept.misses === 0 && this.sameArea(kept.box, track.box));
       if (!duplicate) survivors.push(track);
     }
 

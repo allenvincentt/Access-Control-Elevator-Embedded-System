@@ -109,6 +109,7 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
     PERSON_DETECTION.boxGlideMinMs,
   );
   const [stats, setStats] = useState<DetectionStats | null>(null);
+  const [frameMs, setFrameMs] = useState(0);
   const [tracked, setTracked] = useState<TrackedCount | null>(null);
   const [source, setSource] = useState<{
     width: number;
@@ -205,7 +206,11 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
         if (counting !== trackingRef.current) {
           trackingRef.current = counting;
           reportedKey.current = null;
-          tracker.current.reset();
+          if (counting) {
+            tracker.current.keepLive();
+          } else {
+            tracker.current.reset();
+          }
         }
 
         const frame = await capture();
@@ -248,6 +253,7 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
             ? now - lastFrameAt.current
             : PERSON_DETECTION.boxGlideMinMs;
         lastFrameAt.current = now;
+        setFrameMs(gap);
         setGlideMs(
           Math.min(
             PERSON_DETECTION.boxGlideMaxMs,
@@ -363,6 +369,7 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
               facing="back"
               active={appActive}
               animateShutter={false}
+              pictureSize={PERSON_DETECTION.pictureSize}
               onCameraReady={() => setCameraReady(true)}
             />
             <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
@@ -391,7 +398,7 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
                   {`model ${stats.reported}/${stats.scanned}  gate ${stats.decoded}  merged ${stats.merged}  in view ${stats.accepted}  counted ${observed}`}
                 </Text>
                 <Text style={styles.diagnosticsText}>
-                  {`${stats.kind} ${stats.target} · best ${stats.topScore.toFixed(2)} · new ${stats.minScore.toFixed(2)} · keep ${stats.sustainScore.toFixed(2)}`}
+                  {`${stats.kind} ${stats.target} · best ${stats.topScore.toFixed(2)} · new ${stats.minScore.toFixed(2)} · keep ${stats.sustainScore.toFixed(2)} · ${frameMs} ms/frame`}
                 </Text>
               </View>
             ) : null}
@@ -472,6 +479,11 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
               <Text style={styles.compactText}>
                 {idleBody(boarding?.phase, expected)}
               </Text>
+              {boarding?.phase === "boarding" && boarding.attempt > 0 ? (
+                <Text style={[styles.compactText, styles.compactWarning]}>
+                  {`Last count did not match. Attempt ${boarding.attempt} of ${boarding.maxAttempts} used.`}
+                </Text>
+              ) : null}
               {ride.error ? (
                 <Text style={[styles.compactText, styles.compactError]}>
                   {ride.error}
@@ -493,7 +505,7 @@ function idleTitle(phase: string | undefined): string {
 
 function idleBody(phase: string | undefined, expected: number): string {
   if (phase === "boarding") {
-    return `${expected} verified so far. The count starts when the door closes.`;
+    return `${expected} verified so far. Pick a floor, then press the door button to start the count.`;
   }
   if (phase === "cleared") {
     return "The controller released the car. Counting stops until the next ride.";
