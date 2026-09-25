@@ -114,6 +114,7 @@ export const PERSON_DETECTION = {
   pollIntervalMs: 90,
   idlePollIntervalMs: 200,
   frameQuality: 0.45,
+  pictureSize: '1280x960',
 
   /**
    * Suppression applied on top of the model's own NMS. TFLite_Detection_PostProcess
@@ -137,12 +138,12 @@ export const PERSON_DETECTION = {
 
   iouMatchThreshold: 0.25,
   trackCentreMatch: 0.6,
+  trackReacquireCentre: 1.2,
   trackCentreFloor: 0.06,
   /** Consecutive frames a new box must survive before it counts as a person. */
   trackConfirmFrames: 3,
-  trackMissLimit: 6,
-  /** A confirmed track keeps counting through this many missed frames. */
-  trackCountGrace: 2,
+  trackForgetMs: 5000,
+  trackCountGraceMs: 2500,
   /** Two confirmed tracks overlapping this much (over the smaller) are one person. */
   trackOverlapThreshold: 0.8,
   stableFrames: 3,
