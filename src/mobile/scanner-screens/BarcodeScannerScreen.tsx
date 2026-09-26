@@ -15,16 +15,20 @@ import { GeneralButton } from "@/components/ui/buttons/GeneralButton";
 import { Icon } from "@/components/ui/Icon";
 import { Input } from "@/components/ui/Input";
 import { ShakeView } from "@/components/ui/ShakeView";
+import { floorShortLabel } from "@/constants/floors";
 import { colors, spacing, typography } from "@/constants/themeColor";
 import { getDeviceId } from "@/lib/deviceId";
 import { DENIAL_MESSAGES, errorMessage } from "@/lib/errors";
 import { announceAccessDenied, announceAccessGranted } from "@/lib/speech";
-import { verifyBarcode } from "@/services/verificationService";
+import { checkBarcodeFloor, verifyBarcode } from "@/services/verificationService";
+import type { FloorKey } from "@/types/database";
 
 export type BarcodeScannerScreenProps = {
   onVerified: (session: VerificationSession) => void;
   onExit: () => void;
   notice?: ReactNode;
+  locked?: boolean;
+  requiredFloor?: FloorKey | null;
 };
 
 const RESCAN_COOLDOWN_MS = 1500;
@@ -48,6 +52,8 @@ export function BarcodeScannerScreen({
   onVerified,
   onExit,
   notice,
+  locked = false,
+  requiredFloor = null,
 }: BarcodeScannerScreenProps) {
   const snackbar = useSnackbar();
 
@@ -81,6 +87,7 @@ export function BarcodeScannerScreen({
 
   const runVerification = useCallback(
     async (raw: string) => {
+      if (locked) return;
       if (rearmTimer.current) clearTimeout(rearmTimer.current);
       setStatus("verifying");
       setDenial(null);
@@ -89,6 +96,28 @@ export function BarcodeScannerScreen({
         const deviceId = await getDeviceId();
         const result = await verifyBarcode(raw, deviceId);
         if (!mounted.current) return;
+
+        if (result.ok && requiredFloor) {
+          const shared = await checkBarcodeFloor(
+            result.session_token,
+            requiredFloor,
+            deviceId,
+          );
+          if (!mounted.current) return;
+          if (!shared.ok) {
+            const message =
+              shared.reason === "FloorNotAuthorized"
+                ? `${result.staff.full_name} is not cleared for ${floorShortLabel(requiredFloor)}, the floor this ride is locked to. Wait for the next ride.`
+                : DENIAL_MESSAGES[shared.reason];
+            setStatus("error");
+            setAttempts((count) => count + 1);
+            setDenial(message);
+            announceAccessDenied();
+            snackbar.show(message, { variant: "error" });
+            rearmAfterDenial();
+            return;
+          }
+        }
 
         if (result.ok) {
           setStatus("success");
@@ -129,12 +158,12 @@ export function BarcodeScannerScreen({
         rearmAfterDenial();
       }
     },
-    [onVerified, rearmAfterDenial, snackbar],
+    [locked, onVerified, rearmAfterDenial, requiredFloor, snackbar],
   );
 
   const handleScan = useCallback(
     (data: string) => {
-      if (status !== "scanning") return;
+      if (status !== "scanning" || locked) return;
 
       const code = data.trim().toUpperCase();
       const now = Date.now();
@@ -148,7 +177,7 @@ export function BarcodeScannerScreen({
       lastScan.current = { code, at: now };
       void runVerification(code);
     },
-    [runVerification, status],
+    [locked, runVerification, status],
   );
 
   const hint = HINTS[Math.min(attempts, HINTS.length - 1)];
@@ -172,7 +201,7 @@ export function BarcodeScannerScreen({
             <CameraView
               style={StyleSheet.absoluteFill}
               facing="back"
-              active={!manualOpen}
+              active={!manualOpen && !locked}
               barcodeScannerSettings={{
                 barcodeTypes: [
                   "qr",
@@ -185,15 +214,15 @@ export function BarcodeScannerScreen({
                 ],
               }}
               onBarcodeScanned={
-                status === "scanning"
+                status === "scanning" && !locked
                   ? (result) => handleScan(result.data)
                   : undefined
               }
             />
             <ScannerOverlay
               shape="square"
-              status={status}
-              caption={CAPTIONS[status]}
+              status={locked ? "idle" : status}
+              caption={locked ? "Waiting for a floor button press" : CAPTIONS[status]}
             />
           </>
         }
@@ -226,7 +255,7 @@ export function BarcodeScannerScreen({
                   Continuing to face verification…
                 </Text>
               </>
-            ) : (
+            ) : locked ? null : (
               <>
                 <View style={styles.panelHead}>
                   <Icon name="qr" size={20} color={colors.primary} />

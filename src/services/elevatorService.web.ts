@@ -10,7 +10,8 @@ export type RideFault =
   | 'offline'
   | 'cancelled'
   | 'no_floor'
-  | 'hold_expired';
+  | 'hold_expired'
+  | 'wrong_floor';
 
 export type BoardingStatus = {
   phase: RidePhase;
@@ -23,6 +24,8 @@ export type BoardingStatus = {
   emergency: boolean;
   fault: RideFault;
   faultSeq: number;
+  awaitingFloor: boolean;
+  lockedFloor: FloorKey | null;
 };
 
 export type ElevatorStatus = {

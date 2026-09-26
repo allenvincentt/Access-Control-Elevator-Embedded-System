@@ -159,12 +159,25 @@ async function pollStatus() {
   }
 }
 
+function dropRejectedRiders(boarding: BoardingStatus, ridersAtRead: number) {
+  const active = boarding.phase === 'boarding' || boarding.phase === 'counting';
+  if (!active || ridersAtRead !== state.riders.length || boarding.expected >= ridersAtRead) {
+    return;
+  }
+  const kept = state.riders.slice(0, boarding.expected);
+  const rejected = state.riders.slice(boarding.expected);
+  emit({ riders: kept });
+  void releaseTokens(rejected);
+}
+
 async function pollBoarding() {
   if (boardingInFlight) return;
   boardingInFlight = true;
   try {
+    const ridersAtRead = state.riders.length;
     const boarding = await readBoardingStatus();
     boardingFailures = 0;
+    dropRejectedRiders(boarding, ridersAtRead);
     emit({ boarding, boardingError: null, boardingCheck: null });
   } catch (error) {
     boardingFailures += 1;

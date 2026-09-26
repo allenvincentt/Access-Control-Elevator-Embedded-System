@@ -7,6 +7,7 @@ import {
   announcePickFloor,
   announceRideCancelled,
   announceRideCleared,
+  announceWrongFloor,
 } from '@/lib/speech';
 import type { BoardingStatus, RidePhase } from '@/services/elevatorService';
 
@@ -35,6 +36,8 @@ export function useRideNarration(boarding: BoardingStatus | null, enabled: boole
         announcePickFloor();
       } else if (boarding.fault === 'hold_expired') {
         announceHoldExpired();
+      } else if (boarding.fault === 'wrong_floor') {
+        announceWrongFloor();
       }
     }
 
