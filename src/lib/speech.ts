@@ -34,7 +34,7 @@ export function announceScanAgain(): void {
 
 export function announceBoardingHold(expected: number): void {
   const who = expected === 1 ? 'One person verified' : `${expected} people verified`;
-  speak(`${who}. The door is held open. Pick a floor, then press the door close button.`);
+  speak(`${who}. The door is held open. Press your floor button now.`);
 }
 
 export function announceOccupancyMismatch(expected: number, observed: number): void {
@@ -66,6 +66,10 @@ export function announceRideCancelled(): void {
 
 export function announcePickFloor(): void {
   speak('Select a floor before closing the door.');
+}
+
+export function announceWrongFloor(): void {
+  speak('Wrong floor. This ride is locked to another floor. Please step out.');
 }
 
 export function announceHoldExpired(): void {

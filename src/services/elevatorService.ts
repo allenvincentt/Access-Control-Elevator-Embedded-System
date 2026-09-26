@@ -31,7 +31,8 @@ export type RideFault =
   | 'offline'
   | 'cancelled'
   | 'no_floor'
-  | 'hold_expired';
+  | 'hold_expired'
+  | 'wrong_floor';
 
 export type BoardingStatus = {
   phase: RidePhase;
@@ -44,6 +45,8 @@ export type BoardingStatus = {
   emergency: boolean;
   fault: RideFault;
   faultSeq: number;
+  awaitingFloor: boolean;
+  lockedFloor: FloorKey | null;
 };
 
 export type ElevatorStatus = {
@@ -75,6 +78,10 @@ const ACK_FAILURES: Record<string, string> = {
   no_shared_floor:
     'This badge shares no authorized floor with the group already boarding. Ride separately.',
   car_full: 'The elevator controller will not accept any more riders on this trip.',
+  await_floor:
+    'The last rider has not pressed a floor button yet. Press the floor inside the car, then scan.',
+  floor_locked:
+    'This badge is not cleared for the floor this ride is locked to. Wait for the next ride.',
   not_counting: 'The elevator controller is not waiting for an occupancy count right now.',
   bad_count: 'The elevator controller rejected that occupancy count.',
   too_long:
@@ -634,7 +641,8 @@ function readRideFault(value: unknown): RideFault {
     value === 'offline' ||
     value === 'cancelled' ||
     value === 'no_floor' ||
-    value === 'hold_expired'
+    value === 'hold_expired' ||
+    value === 'wrong_floor'
     ? value
     : 'none';
 }
@@ -656,6 +664,8 @@ function parseBoarding(payload: Record<string, unknown>): BoardingStatus {
     emergency: payload.g === true,
     fault: readRideFault(payload.f),
     faultSeq: countOf(payload.q, 0),
+    awaitingFloor: payload.w === true,
+    lockedFloor: readFloor(payload.l),
   };
 }
 

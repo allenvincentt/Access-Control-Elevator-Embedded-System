@@ -12,7 +12,7 @@ static const char *STATUS_CHAR_UUID = "6e6c0002-b5a3-f393-e0a9-e50e24dcca9e";
 static const char *COMMAND_CHAR_UUID = "6e6c0003-b5a3-f393-e0a9-e50e24dcca9e";
 static const char *BOARDING_CHAR_UUID = "6e6c0004-b5a3-f393-e0a9-e50e24dcca9e";
 static const char *DEVICE_KEY = "Elevator123";
-static const char *FIRMWARE_BUILD = "260924-1";
+static const char *FIRMWARE_BUILD = "260926-1";
 
 static const uint8_t INSIDE_FLOOR_BUTTON_COUNT = 3;
 static const uint8_t HALL_CALL_COUNT = 4;
@@ -35,12 +35,14 @@ static const uint8_t PIN_SERVO_RIGHT = 19;
 static const uint8_t PIN_BUZZER = 23;
 static const uint8_t PIN_OLED_SDA = 21;
 static const uint8_t PIN_OLED_SCL = 22;
+static const uint8_t PIN_FLOOR_SWITCH[3] = {34, 35, 39};
 
 static const uint8_t OLED_WIDTH = 128;
 static const uint8_t OLED_HEIGHT = 64;
 static const uint8_t OLED_ADDRESS_PRIMARY = 0x3C;
 static const uint8_t OLED_ADDRESS_ALTERNATE = 0x3D;
 static const uint32_t OLED_I2C_HZ = 400000;
+static const uint32_t OLED_HEALTH_CHECK_MS = 1000;
 
 static const char *FLOOR_KEY[3] = {"FirstFloor", "SecondFloor", "ThirdFloor"};
 static const char FLOOR_DIGIT[3] = {'1', '2', '3'};
@@ -50,8 +52,11 @@ static const uint8_t LOBBY_FLOOR = 0;
 static const uint32_t DOOR_BOARDING_HOLD_MS = 8000;
 static const uint32_t DOOR_ARRIVAL_HOLD_MS = 5000;
 static const uint32_t DOOR_TRAVEL_MS = 900;
-static const uint32_t FLOOR_TRAVEL_MS = 1400;
-static const uint32_t MOTOR_STOP_DELAY_MS = 700;
+static const bool HOMING_ENABLED = false;
+static const uint32_t FLOOR_TRAVEL_TIMEOUT_MS = 4000;
+static const uint32_t HOMING_TIMEOUT_MS = 10000;
+static const uint32_t FLOOR_SWITCH_DEBOUNCE_MS = 8;
+static const uint32_t MOTOR_BRAKE_MS = 300;
 static const uint32_t MOTOR_KICK_MS = 150;
 static const uint32_t ARRIVAL_CHIME_DELAY_MS = 1000;
 static const uint32_t ARROW_FRAME_MS = 220;
@@ -66,7 +71,6 @@ static const uint8_t ACK_SLOTS = 4;
 static const uint8_t COMMAND_SLOTS = 4;
 static const size_t BLE_PACKET_MAX_BYTES = 180;
 static const uint32_t STATUS_COUNTER_CAP = 999;
-static const bool RIDE_MERGE_INTERSECTS = false;
 
 static const uint32_t MOTOR_PWM_FREQ = 20000;
 static const uint8_t MOTOR_PWM_BITS = 8;
@@ -225,6 +229,8 @@ static int8_t chooseDirection();
 static Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
 static bool displayReady = false;
 static bool displayDirty = true;
+static uint8_t displayAddress = 0;
+static uint32_t displayCheckedAt = 0;
 static uint8_t arrowFrame = 0;
 static uint32_t arrowFrameAt = 0;
 
@@ -265,6 +271,11 @@ static uint32_t grantOpenedAt = 0;
 static uint32_t lastInputAt = 0;
 static bool motorRunning = false;
 static bool emergencyActive = false;
+static bool liftFault = false;
+
+static bool floorSwitchStable[3] = {false, false, false};
+static bool floorSwitchLastRead[3] = {false, false, false};
+static uint32_t floorSwitchChangedAt[3] = {0, 0, 0};
 
 static const ToneStep *tonePattern = nullptr;
 static uint8_t tonePatternSteps = 0;
@@ -305,6 +316,7 @@ static uint8_t lastReportedRiders = 0xFF;
 static uint8_t occupancyStreak = 0;
 static uint8_t occupancyAttempt = 0;
 static bool boardingHold = false;
+static bool riderAwaitingFloor = false;
 static uint32_t holdStartedAt = 0;
 static uint32_t countRequestedAt = 0;
 static bool countReported = false;
@@ -474,6 +486,13 @@ static void motorStop() {
   motorRunning = false;
 }
 
+static void motorBrake() {
+  digitalWrite(PIN_MOTOR_IN1, HIGH);
+  digitalWrite(PIN_MOTOR_IN2, HIGH);
+  motorWriteDuty(255);
+  motorRunning = false;
+}
+
 static void motorStart(int8_t direction) {
   digitalWrite(PIN_MOTOR_IN1, direction > 0 ? HIGH : LOW);
   digitalWrite(PIN_MOTOR_IN2, direction > 0 ? LOW : HIGH);
@@ -489,6 +508,89 @@ static void serviceMotor() {
   if (millis() - motorStartedAt >= MOTOR_KICK_MS) {
     motorWriteDuty(MOTOR_CRUISE_DUTY);
   }
+}
+
+static int8_t floorSwitchHit = -1;
+
+static void pollFloorSwitches() {
+  uint32_t now = millis();
+  for (uint8_t i = 0; i < 3; i++) {
+    bool pressed = digitalRead(PIN_FLOOR_SWITCH[i]) == LOW;
+    if (pressed != floorSwitchLastRead[i]) {
+      floorSwitchLastRead[i] = pressed;
+      floorSwitchChangedAt[i] = now;
+      continue;
+    }
+    if (now - floorSwitchChangedAt[i] < FLOOR_SWITCH_DEBOUNCE_MS) {
+      continue;
+    }
+    if (pressed == floorSwitchStable[i]) {
+      continue;
+    }
+    floorSwitchStable[i] = pressed;
+    if (pressed) {
+      floorSwitchHit = (int8_t)i;
+    }
+  }
+}
+
+static int8_t sensedFloor() {
+  for (uint8_t i = 0; i < 3; i++) {
+    if (floorSwitchStable[i]) {
+      return (int8_t)i;
+    }
+  }
+  return -1;
+}
+
+static void initFloorSwitches() {
+  for (uint8_t i = 0; i < 3; i++) {
+    pinMode(PIN_FLOOR_SWITCH[i], INPUT);
+    floorSwitchStable[i] = digitalRead(PIN_FLOOR_SWITCH[i]) == LOW;
+    floorSwitchLastRead[i] = floorSwitchStable[i];
+    floorSwitchChangedAt[i] = millis();
+  }
+}
+
+static bool homeToLobby() {
+  int8_t sensed = sensedFloor();
+  if (sensed >= 0) {
+    currentFloor = (uint8_t)sensed;
+    Serial.print("[home] car parked at ");
+    Serial.println(FLOOR_KEY[currentFloor]);
+    return true;
+  }
+
+  if (!HOMING_ENABLED) {
+    currentFloor = LOBBY_FLOOR;
+    Serial.println("[home] no floor switch pressed, homing off, assuming FirstFloor");
+    return true;
+  }
+
+  Serial.println("[home] no floor switch pressed, driving down to the lobby");
+  floorSwitchHit = -1;
+  motorStart(-1);
+  uint32_t startedAt = millis();
+  while (millis() - startedAt < HOMING_TIMEOUT_MS) {
+    serviceMotor();
+    pollFloorSwitches();
+    if (floorSwitchHit == (int8_t)LOBBY_FLOOR) {
+      motorBrake();
+      delay(MOTOR_BRAKE_MS);
+      motorStop();
+      floorSwitchHit = -1;
+      currentFloor = LOBBY_FLOOR;
+      Serial.println("[home] lobby switch hit, car homed");
+      return true;
+    }
+    delay(2);
+  }
+
+  motorStop();
+  floorSwitchHit = -1;
+  currentFloor = LOBBY_FLOOR;
+  Serial.println("[home] FAULT: lobby switch never closed, lift locked until a floor switch is pressed");
+  return false;
 }
 
 static uint16_t clampServoUs(uint16_t microseconds) {
@@ -663,6 +765,7 @@ static void resetRide() {
   occupancyStreak = 0;
   occupancyAttempt = 0;
   boardingHold = false;
+  riderAwaitingFloor = false;
   holdStartedAt = 0;
   countRequestedAt = 0;
   countReported = false;
@@ -765,6 +868,7 @@ static bool startDisplay() {
       continue;
     }
     if (display.begin(SSD1306_SWITCHCAPVCC, candidates[i], false, false)) {
+      displayAddress = candidates[i];
       Serial.print("[oled] ready at 0x");
       Serial.println(candidates[i], HEX);
       return true;
@@ -945,16 +1049,51 @@ static bool shouldShowCreature() {
   return millis() - lastInputAt >= IDLE_ANIMATION_MS;
 }
 
-static void serviceDisplay() {
-  if (!displayReady) {
+static bool reinitDisplay(uint8_t address) {
+  if (!display.begin(SSD1306_SWITCHCAPVCC, address, false, false)) {
+    return false;
+  }
+  displayAddress = address;
+  displayDirty = true;
+  lastDrawnFrame = 0xFF;
+  return true;
+}
+
+static void serviceDisplayHealth(uint32_t now) {
+  if (now - displayCheckedAt < OLED_HEALTH_CHECK_MS) {
+    return;
+  }
+  displayCheckedAt = now;
+
+  if (displayReady) {
+    if (!i2cDeviceResponds(displayAddress)) {
+      displayReady = false;
+      Serial.println("[oled] stopped answering, check the wires, will reconnect on its own");
+    }
     return;
   }
 
+  const uint8_t candidates[2] = {OLED_ADDRESS_PRIMARY, OLED_ADDRESS_ALTERNATE};
+  for (uint8_t i = 0; i < 2; i++) {
+    if (i2cDeviceResponds(candidates[i]) && reinitDisplay(candidates[i])) {
+      displayReady = true;
+      Serial.print("[oled] reconnected at 0x");
+      Serial.println(candidates[i], HEX);
+      return;
+    }
+  }
+}
+
+static void serviceDisplay() {
   if (doorState == DOOR_OPENING || doorState == DOOR_CLOSING) {
     return;
   }
 
   uint32_t now = millis();
+  serviceDisplayHealth(now);
+  if (!displayReady) {
+    return;
+  }
   bool wantCreature = shouldShowCreature();
 
   if (wantCreature != creatureVisible) {
@@ -1224,6 +1363,10 @@ static String boardingJson() {
   json += rideFault;
   json += "\",\"q\":";
   json += String(rideFaultSeq);
+  json += ",\"w\":";
+  json += riderAwaitingFloor ? "true" : "false";
+  json += ",\"l\":";
+  json += String((int)floorIndexOrNone(rideActive() ? selectedFloorIndex : -1));
   json += "}";
   return json;
 }
@@ -1250,25 +1393,14 @@ static void publishBoarding() {
   }
 }
 
-static void mergeRider(const String &body) {
-  for (uint8_t i = 0; i < 3; i++) {
-    bool incoming = grantIncludesFloor(body, FLOOR_KEY[i]);
-    floorAuthorized[i] = RIDE_MERGE_INTERSECTS ? (floorAuthorized[i] && incoming)
-                                               : (floorAuthorized[i] || incoming);
-  }
-}
-
-static uint8_t authorizedFloorCount() {
-  uint8_t total = 0;
-  for (uint8_t i = 0; i < 3; i++) {
-    if (floorAuthorized[i]) {
-      total++;
-    }
-  }
-  return total;
-}
-
 static void processJoin(const String &body) {
+  if (riderAwaitingFloor || selectedFloorIndex < 0) {
+    ackOk = false;
+    ackError = "await_floor";
+    Serial.println("[ride] join rejected: the last rider has not pressed a floor yet");
+    return;
+  }
+
   if (expectedRiders >= RIDER_LIMIT) {
     ackOk = false;
     ackError = "car_full";
@@ -1276,30 +1408,16 @@ static void processJoin(const String &body) {
     return;
   }
 
-  bool previous[3];
-  for (uint8_t i = 0; i < 3; i++) {
-    previous[i] = floorAuthorized[i];
-  }
-
-  mergeRider(body);
-
-  if (authorizedFloorCount() == 0) {
-    for (uint8_t i = 0; i < 3; i++) {
-      floorAuthorized[i] = previous[i];
-    }
+  if (!grantIncludesFloor(body, FLOOR_KEY[selectedFloorIndex])) {
     ackOk = false;
-    ackError = "no_shared_floor";
-    Serial.println("[ride] join rejected: no floor shared with the group");
+    ackError = "floor_locked";
+    Serial.print("[ride] join rejected: badge not cleared for the locked destination ");
+    Serial.println(FLOOR_KEY[selectedFloorIndex]);
     return;
   }
 
-  if (selectedFloorIndex >= 0 && !floorAuthorized[selectedFloorIndex]) {
-    callInside[selectedFloorIndex] = false;
-    selectedFloorIndex = -1;
-    Serial.println("[ride] selected floor dropped, the new rider is not cleared for it");
-  }
-
   expectedRiders++;
+  riderAwaitingFloor = true;
   holdStartedAt = millis();
   lastInputAt = holdStartedAt;
   rideFault = "none";
@@ -1311,7 +1429,9 @@ static void processJoin(const String &body) {
 
   Serial.print("[ride] rider ");
   Serial.print((unsigned)expectedRiders);
-  Serial.print(" joined: ");
+  Serial.print(" joined, must press ");
+  Serial.print(FLOOR_KEY[selectedFloorIndex]);
+  Serial.print(": ");
   Serial.println(grantStaff[0] == '\0' ? "unnamed staff" : grantStaff);
 
   publishBoarding();
@@ -1325,10 +1445,11 @@ static void processGrant(const String &body) {
     return;
   }
 
-  if (state != STATE_IDLE) {
+  if (state != STATE_IDLE || liftFault) {
     ackOk = false;
     ackError = "busy";
-    Serial.println("[grant] rejected: elevator busy");
+    Serial.println(liftFault ? "[grant] rejected: lift fault, car position unknown"
+                             : "[grant] rejected: elevator busy");
     return;
   }
 
@@ -1369,6 +1490,7 @@ static void processGrant(const String &body) {
   occupancyStreak = 0;
   occupancyAttempt = 0;
   boardingHold = true;
+  riderAwaitingFloor = true;
   holdStartedAt = grantOpenedAt;
   countRequestedAt = 0;
   countReported = false;
@@ -1780,6 +1902,7 @@ static void beginMoving() {
   arrowFrameAt = segmentStartedAt;
   travelPhase = TRAVEL_MOVING;
   displayDirty = true;
+  floorSwitchHit = -1;
 
   publishStatus();
   motorStart(travelStep);
@@ -1901,15 +2024,103 @@ static void finishArrival() {
   publishStatus();
 }
 
+static void denyFloor(uint8_t index) {
+  deniedFloorIndex = (int8_t)index;
+  deniedFloorSeq++;
+  publishStatus();
+}
+
+static void rejectPendingRider() {
+  riderAwaitingFloor = false;
+  if (expectedRiders > 1) {
+    expectedRiders--;
+  }
+  rideFault = "wrong_floor";
+  rideFaultSeq++;
+  displayDirty = true;
+  startTone(CHECK_FAILED_TONE, CHECK_FAILED_TONE_STEPS, false);
+  Serial.print("[ride] rider rejected, did not press the locked destination, riders now ");
+  Serial.println((unsigned)expectedRiders);
+  publishBoarding();
+}
+
+static void lockDestination(uint8_t index) {
+  selectedFloorIndex = (int8_t)index;
+  callInside[index] = true;
+  for (uint8_t i = 0; i < 3; i++) {
+    floorAuthorized[i] = i == index;
+  }
+  Serial.print("[ride] destination locked: ");
+  Serial.println(FLOOR_KEY[index]);
+}
+
+static void acceptPendingRider() {
+  riderAwaitingFloor = false;
+  if (strcmp(rideFault, "no_floor") == 0) {
+    rideFault = "none";
+  }
+  displayDirty = true;
+  Serial.print("[ride] rider ");
+  Serial.print((unsigned)expectedRiders);
+  Serial.println(" confirmed the destination, scanner unlocked");
+  publishBoarding();
+  publishStatus();
+}
+
+static void onRideFloorButton(uint8_t index) {
+  if (!floorButtonsArmed()) {
+    Serial.print("[inside] held, door still opening: ");
+    Serial.println(FLOOR_KEY[index]);
+    return;
+  }
+
+  if (selectedFloorIndex < 0) {
+    if (!floorAuthorized[index]) {
+      Serial.print("[inside] ignored, floor not assigned to ");
+      Serial.print(grantStaff[0] == '\0' ? "this badge" : grantStaff);
+      Serial.print(": ");
+      Serial.println(FLOOR_KEY[index]);
+      denyFloor(index);
+      return;
+    }
+    if (index == currentFloor) {
+      Serial.print("[inside] already at ");
+      Serial.println(FLOOR_KEY[index]);
+      return;
+    }
+    lockDestination(index);
+    acceptPendingRider();
+    return;
+  }
+
+  if (index == (uint8_t)selectedFloorIndex) {
+    if (riderAwaitingFloor) {
+      acceptPendingRider();
+    }
+    return;
+  }
+
+  Serial.print("[inside] refused, destination is locked to ");
+  Serial.print(FLOOR_KEY[selectedFloorIndex]);
+  Serial.print(": ");
+  Serial.println(FLOOR_KEY[index]);
+  if (riderAwaitingFloor) {
+    rejectPendingRider();
+  }
+  denyFloor(index);
+}
+
 static void onInsideFloorButton(uint8_t index) {
+  if (rideActive()) {
+    onRideFloorButton(index);
+    return;
+  }
   if (!floorAuthorized[index]) {
     Serial.print("[inside] ignored, floor not assigned to ");
     Serial.print(grantStaff[0] == '\0' ? "this badge" : grantStaff);
     Serial.print(": ");
     Serial.println(FLOOR_KEY[index]);
-    deniedFloorIndex = (int8_t)index;
-    deniedFloorSeq++;
-    publishStatus();
+    denyFloor(index);
     return;
   }
   if (!floorButtonsArmed()) {
@@ -1932,16 +2143,6 @@ static void onInsideFloorButton(uint8_t index) {
   selectedFloorIndex = (int8_t)index;
   Serial.print("[inside] queued: ");
   Serial.println(FLOOR_KEY[index]);
-
-  if (rideActive()) {
-    if (strcmp(rideFault, "no_floor") == 0) {
-      rideFault = "none";
-    }
-    displayDirty = true;
-    publishBoarding();
-    publishStatus();
-    return;
-  }
 
   if (state == STATE_DOOR_OPEN) {
     int8_t direction = chooseDirection();
@@ -1985,6 +2186,11 @@ static void onDoorButton() {
     return;
   }
 
+  if (liftFault) {
+    Serial.println("[door] button ignored, car may be between floors");
+    return;
+  }
+
   if (ridePhase == RIDE_COUNTING) {
     Serial.println("[ride] count interrupted at the door button, reopening");
     rideFault = "none";
@@ -1993,8 +2199,8 @@ static void onDoorButton() {
   }
 
   if (ridePhase == RIDE_BOARDING && doorState != DOOR_CLOSED && doorState != DOOR_CLOSING) {
-    if (selectedFloorIndex < 0) {
-      Serial.println("[ride] close refused, no floor selected yet");
+    if (selectedFloorIndex < 0 || riderAwaitingFloor) {
+      Serial.println("[ride] close refused, the last rider has not pressed a floor yet");
       rideFault = "no_floor";
       rideFaultSeq++;
       publishBoarding();
@@ -2074,9 +2280,38 @@ static void pollButtons() {
   }
 }
 
+static void tripLiftFault() {
+  motorStop();
+  liftFault = true;
+  clearAllCalls();
+  travelDirection = 0;
+  sessionResult = "cancelled";
+  enterIdle();
+  startTone(CHECK_FAILED_TONE, CHECK_FAILED_TONE_STEPS, false);
+  Serial.println("[travel] FAULT: no floor switch closed in time, motor stopped, lift locked");
+  Serial.println("[travel] move the car onto any floor switch to clear the fault");
+  publishStatus();
+}
+
+static void serviceLiftFault() {
+  int8_t hit = floorSwitchHit;
+  floorSwitchHit = -1;
+  if (hit < 0) {
+    return;
+  }
+  liftFault = false;
+  currentFloor = (uint8_t)hit;
+  selectedFloor = currentFloor;
+  displayFloor = currentFloor;
+  displayDirty = true;
+  Serial.print("[travel] fault cleared, car found at ");
+  Serial.println(FLOOR_KEY[currentFloor]);
+  publishStatus();
+}
+
 static void serviceTravel(uint32_t now) {
   if (travelPhase == TRAVEL_SETTLING) {
-    if (now - settleStartedAt >= MOTOR_STOP_DELAY_MS) {
+    if (now - settleStartedAt >= MOTOR_BRAKE_MS) {
       beginArrivalSequence();
     }
     return;
@@ -2102,25 +2337,39 @@ static void serviceTravel(uint32_t now) {
     return;
   }
 
-  if (now - segmentStartedAt < FLOOR_TRAVEL_MS) {
+  int8_t hit = floorSwitchHit;
+  floorSwitchHit = -1;
+
+  if (hit < 0 || (uint8_t)hit == currentFloor) {
+    if (now - segmentStartedAt >= FLOOR_TRAVEL_TIMEOUT_MS) {
+      tripLiftFault();
+    }
     return;
   }
 
-  displayFloor = (uint8_t)((int8_t)displayFloor + travelStep);
+  if ((int8_t)hit != (int8_t)currentFloor + travelStep) {
+    Serial.print("[travel] skipped a floor, the ");
+    Serial.print(FLOOR_KEY[hit]);
+    Serial.println(" switch closed, trusting the switch");
+  }
+
+  displayFloor = (uint8_t)hit;
   currentFloor = displayFloor;
   segmentStartedAt = now;
   arrowFrame = 0;
   arrowFrameAt = now;
   displayDirty = true;
 
-  if (shouldStopAt(currentFloor, travelDirection) ||
+  bool atEnd = (travelStep > 0 && currentFloor == 2) || (travelStep < 0 && currentFloor == 0);
+  if (atEnd || shouldStopAt(currentFloor, travelDirection) ||
       !callsInDirection(currentFloor, travelDirection)) {
+    motorBrake();
     travelPhase = TRAVEL_SETTLING;
     settleStartedAt = now;
     selectedFloor = currentFloor;
     Serial.print("[travel] reached ");
     Serial.print(FLOOR_KEY[displayFloor]);
-    Serial.println(", leveling before motor stop");
+    Serial.println(", switch closed, braking");
   } else {
     selectedFloor = nextStopInDirection(currentFloor, travelDirection);
     Serial.print("[travel] passing ");
@@ -2140,6 +2389,9 @@ static void serviceRide(uint32_t now) {
       cancelRide("cancelled");
       return;
     }
+    if (riderAwaitingFloor) {
+      rejectPendingRider();
+    }
     Serial.println("[ride] hold cap reached, closing the door and counting");
     boardingHold = false;
     rideFault = "hold_expired";
@@ -2156,6 +2408,11 @@ static void serviceRide(uint32_t now) {
 
 static void serviceStateMachine() {
   uint32_t now = millis();
+
+  if (liftFault) {
+    serviceLiftFault();
+    return;
+  }
 
   if (rideActive()) {
     serviceRide(now);
@@ -2284,10 +2541,15 @@ void setup() {
   }
 
   currentFloor = LOBBY_FLOOR;
+  initFloorSwitches();
+  liftFault = SERVO_TRIM_MODE ? false : !homeToLobby();
+  selectedFloor = currentFloor;
   enterIdle();
 
   lastInputAt = millis() - IDLE_ANIMATION_MS;
-  Serial.println("[boot] idle at FirstFloor, door closed, idle animation showing");
+  Serial.print("[boot] idle at ");
+  Serial.print(FLOOR_KEY[currentFloor]);
+  Serial.println(", door closed, idle animation showing");
 
   if (SERVO_TRIM_MODE) {
     armServos();
@@ -2359,6 +2621,7 @@ void loop() {
     Serial.println(" write(s) total, sender will time out and retry");
   }
   pollButtons();
+  pollFloorSwitches();
   serviceDoor();
   serviceStateMachine();
   serviceMotor();

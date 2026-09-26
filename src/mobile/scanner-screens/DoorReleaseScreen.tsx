@@ -8,7 +8,7 @@ import { GeneralButton } from '@/components/ui/buttons/GeneralButton';
 import { Icon, type IconName } from '@/components/ui/Icon';
 import { floorShortLabel } from '@/constants/floors';
 import { colors, spacing, typography } from '@/constants/themeColor';
-import { errorMessage } from '@/lib/errors';
+import { AppError, errorMessage } from '@/lib/errors';
 import { announceBoardingHold } from '@/lib/speech';
 import { getRideState, joinRide } from '@/services/rideSession';
 import { cancelVerificationSession } from '@/services/verificationService';
@@ -24,6 +24,7 @@ export type DoorReleaseScreenProps = {
 type Phase = 'releasing' | 'released' | 'error';
 
 const RETURN_HOLD_MS = 2000;
+const POLICY_REFUSALS = new Set(['ELEVATOR_FLOOR_LOCKED', 'ELEVATOR_AWAIT_FLOOR']);
 
 export function DoorReleaseScreen({
   session,
@@ -38,6 +39,8 @@ export function DoorReleaseScreen({
   const [phase, setPhase] = useState<Phase>('releasing');
   const [riders, setRiders] = useState(0);
   const [detail, setDetail] = useState<string | null>(null);
+  const [refused, setRefused] = useState(false);
+  const [lockedFloor, setLockedFloor] = useState<FloorKey | null>(null);
 
   const clearReturnTimer = useCallback(() => {
     if (returnTimer.current) clearTimeout(returnTimer.current);
@@ -48,6 +51,7 @@ export function DoorReleaseScreen({
     clearReturnTimer();
     setPhase('releasing');
     setDetail(null);
+    setRefused(false);
 
     try {
       await joinRide({
@@ -59,8 +63,10 @@ export function DoorReleaseScreen({
       });
       if (!mounted.current) return;
 
-      const count = getRideState().riders.length;
+      const ride = getRideState();
+      const count = ride.riders.length;
       setRiders(count);
+      setLockedFloor(count > 1 ? (ride.boarding?.lockedFloor ?? null) : null);
       setPhase('released');
       announceBoardingHold(count);
       returnTimer.current = setTimeout(() => {
@@ -68,6 +74,7 @@ export function DoorReleaseScreen({
       }, RETURN_HOLD_MS);
     } catch (error) {
       if (!mounted.current) return;
+      setRefused(error instanceof AppError && POLICY_REFUSALS.has(error.code));
       setDetail(
         errorMessage(error, 'The elevator controller could not be reached over Bluetooth.'),
       );
@@ -131,12 +138,18 @@ export function DoorReleaseScreen({
             />
             <Text style={styles.body}>
               {first
-                ? 'The controller confirmed this rider and is opening the door.'
+                ? 'The controller confirmed this rider and is opening the door. The floor they press becomes the destination for the whole ride.'
                 : 'The controller confirmed this rider. The door is already open and still held.'}
             </Text>
-            <HintRow tone="success" title="Cleared floors">
-              {floors.map((floor) => floorShortLabel(floor)).join(' · ')}
-            </HintRow>
+            {lockedFloor ? (
+              <HintRow tone="warning" title={`Press ${floorShortLabel(lockedFloor)}`}>
+                This ride is locked to {floorShortLabel(lockedFloor)}. Pressing any other floor rejects this rider.
+              </HintRow>
+            ) : (
+              <HintRow tone="success" title="Press one of">
+                {floors.map((floor) => floorShortLabel(floor)).join(' · ')}
+              </HintRow>
+            )}
             <GeneralButton
               label="Scan next badge"
               icon="qr"
@@ -146,13 +159,19 @@ export function DoorReleaseScreen({
           </>
         ) : phase === 'error' ? (
           <>
-            <PanelHead icon="error" color={colors.danger} title="Controller not reached" />
+            <PanelHead
+              icon="error"
+              color={colors.danger}
+              title={refused ? 'Rider not accepted' : 'Controller not reached'}
+            />
             <HintRow tone="danger" title="Why">
               {detail ?? 'The elevator controller could not be reached over Bluetooth.'}
             </HintRow>
-            <HintRow tone="neutral" title="What to check">
-              Bluetooth is on, the controller is powered on, and this phone is close to the car.
-            </HintRow>
+            {refused ? null : (
+              <HintRow tone="neutral" title="What to check">
+                Bluetooth is on, the controller is powered on, and this phone is close to the car.
+              </HintRow>
+            )}
             <View style={styles.row}>
               <GeneralButton
                 label="Back"

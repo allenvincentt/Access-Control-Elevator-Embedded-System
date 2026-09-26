@@ -1,6 +1,7 @@
 import { AppError, toAppError } from '@/lib/errors';
 import { supabase } from '@/lib/supabase';
 import type {
+  BarcodeFloorCheckResult,
   BarcodeVerificationResult,
   FaceVerificationResult,
   FloorAccessResult,
@@ -102,6 +103,23 @@ export async function commitFloorAccess(
   if (!data) throw new AppError('NO_RESULT', 'The floor could not be unlocked.');
 
   return data as unknown as FloorAccessResult;
+}
+
+export async function checkBarcodeFloor(
+  sessionToken: string,
+  floor: FloorKey,
+  deviceId: string,
+): Promise<BarcodeFloorCheckResult> {
+  const { data, error } = await supabase.rpc('barcode_session_covers_floor', {
+    p_session_token: sessionToken,
+    p_floor: floor,
+    p_device_id: deviceId,
+  });
+
+  if (error) throw toAppError(error, 'The badge could not be checked against this ride.');
+  if (!data) throw new AppError('NO_RESULT', 'The badge could not be checked against this ride.');
+
+  return data as unknown as BarcodeFloorCheckResult;
 }
 
 export async function cancelVerificationSession(sessionToken: string | null): Promise<void> {

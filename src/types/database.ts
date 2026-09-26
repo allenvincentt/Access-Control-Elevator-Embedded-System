@@ -127,6 +127,8 @@ export type BarcodeVerificationResult =
       staff?: VerifiedStaffSummary;
     };
 
+export type BarcodeFloorCheckResult = { ok: true } | { ok: false; reason: DenialReason };
+
 export type FaceVerificationResult =
   | {
       ok: true;
@@ -275,6 +277,10 @@ export type Database = {
       commit_floor_access: {
         Args: { p_session_token: string; p_floor: FloorKey; p_device_id: string };
         Returns: FloorAccessResult;
+      };
+      barcode_session_covers_floor: {
+        Args: { p_session_token: string; p_floor: FloorKey; p_device_id: string };
+        Returns: BarcodeFloorCheckResult;
       };
       cancel_verification_session: {
         Args: { p_session_token: string };
