@@ -139,7 +139,6 @@ function entryMeta(entry: ActivityEntry): string {
   return parts.join(" · ");
 }
 
-/* -------------------------------------------------------------- status --- */
 
 function SystemStatusPill({ tone, label }: { tone: Tone; label: string }) {
   const meta = TONE[tone];
@@ -161,7 +160,6 @@ function SystemStatusPill({ tone, label }: { tone: Tone; label: string }) {
   );
 }
 
-/* ----------------------------------------------------------- KPI card ---- */
 
 type KpiCardProps = {
   icon: IconName;
@@ -301,7 +299,6 @@ function DeltaCaption({
   );
 }
 
-/* ------------------------------------------------------------- panel ----- */
 
 type PanelProps = {
   title: string;
@@ -348,7 +345,6 @@ function EmptyNote({ children }: { children: string }) {
   return <Text style={styles.emptyNote}>{children}</Text>;
 }
 
-/* ------------------------------------------------------- activity row ---- */
 
 function ActivityRow({
   entry,
@@ -410,10 +406,8 @@ function ActivityRow({
   );
 }
 
-/* -------------------------------------------------------------- screen --- */
 
 export type HomeScreenProps = {
-  /** Jumps to the Logs tab from the activity panel. */
   onViewLogs?: () => void;
 };
 
@@ -578,7 +572,6 @@ const Dashboard = memo(function Dashboard({
   );
 });
 
-/* ----------------------------------------------------------- sections ---- */
 
 type AttemptsRange = "weekly" | "monthly";
 
@@ -1403,7 +1396,6 @@ function LoadingState({
   );
 }
 
-/* ------------------------------------------------------------ helpers ---- */
 
 function resolveSystemStatus(
   error: string | null,
@@ -1437,7 +1429,6 @@ function resolveSystemStatus(
   };
 }
 
-/* ------------------------------------------------------------- styles ---- */
 
 const styles = StyleSheet.create({
   content: {
@@ -1447,8 +1438,6 @@ const styles = StyleSheet.create({
     gap: spacing.base,
   },
   fill: {
-    // flexGrow (not flex) so the panel still measures by content when its
-    // parent has no definite height, and fills the row when it does.
     flexGrow: 1,
   },
   full: {

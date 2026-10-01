@@ -7,17 +7,12 @@ import {
   readConnectedScannerCount,
 } from '@/services/elevatorService';
 
-/** Healthy link: a light poll is enough, the count changes on human timescales. */
 const POLL_MS = 20_000;
-/** Controller out of range: back off so Bluetooth is not scanned constantly. */
 const RETRY_MS = 60_000;
 
 export type ScannerPresence = {
-  /** False on web, where there is no Bluetooth radio to ask. */
   supported: boolean;
-  /** True once the controller has answered at least once. */
   reachable: boolean;
-  /** Scanner terminals currently on the controller's BLE link. */
   online: number;
   checking: boolean;
   error: string | null;
@@ -41,12 +36,6 @@ const UNSUPPORTED: ScannerPresence = {
   error: null,
 };
 
-/**
- * Live count of scanner terminals connected to the ESP32 over Bluetooth.
- *
- * Nothing is registered or provisioned: the controller reports who is on the
- * link right now, so a scanner that powers off simply stops being counted.
- */
 export function useScannerPresence(): ScannerPresence & { refresh: () => void } {
   const [presence, setPresence] = useState<ScannerPresence>(
     SCANNER_LINK_SUPPORTED
@@ -110,8 +99,6 @@ export function useScannerPresence(): ScannerPresence & { refresh: () => void } 
 
     void check();
 
-    // Bluetooth work is pointless while the app is backgrounded, and on iOS it
-    // is throttled anyway — pause, then re-read on the way back in.
     const subscription = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
         void check();

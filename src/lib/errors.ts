@@ -50,7 +50,6 @@ export const DENIAL_MESSAGES: Record<DenialReason, string> = {
   OccupancyMismatch: 'More people were counted in the car than badges scanned.',
 };
 
-/** Chart- and chip-sized wording for the same reasons as DENIAL_MESSAGES. */
 export const DENIAL_LABELS: Record<DenialReason, string> = {
   UnknownCompanyId: 'Badge not recognized',
   Suspended: 'Suspended staff',

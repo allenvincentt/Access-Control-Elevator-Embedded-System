@@ -50,19 +50,12 @@ export type DetectionFrame = {
   height: number;
 };
 
-/** Per-stage counts for one frame, so an empty result can be traced to its cause. */
 export type DetectionStats = {
-  /** Slots the model said it filled. */
   reported: number;
-  /** Slots actually read. */
   scanned: number;
-  /** Person-class boxes that cleared the loosest score and size gate. */
   decoded: number;
-  /** Boxes left once duplicates were merged. */
   merged: number;
-  /** Boxes a scope accepted. This is what the tracker counts. */
   accepted: number;
-  /** Best person-class score in the frame, before any threshold was applied. */
   topScore: number;
   kind: PersonModelKind;
   target: PersonTarget;
@@ -83,7 +76,6 @@ type Pixels = {
 
 let scoresFirst: boolean | null = null;
 
-/** Clears the remembered output ordering. Only needed if the model is reloaded. */
 export function resetRoleResolution() {
   scoresFirst = null;
 }
@@ -184,9 +176,6 @@ function asFloat32(value: unknown): Float32Array {
     return new Float32Array(value, 0, Math.floor(value.byteLength / 4));
   }
 
-  // A view of some other dtype has to be converted element by element. Wrapping
-  // its buffer in a Float32Array would reinterpret the raw bytes instead, which
-  // turns a uint8 output tensor into meaningless floats.
   if (ArrayBuffer.isView(value) && typeof (value as { length?: number }).length === 'number') {
     return Float32Array.from(value as unknown as ArrayLike<number>);
   }
@@ -209,21 +198,6 @@ function bounded(values: Float32Array, limit: number): boolean {
   return true;
 }
 
-/**
- * Works out which of the two [1, N] tensors holds scores and which holds class
- * indices. Converters disagree on the order, and TFLite_Detection_PostProcess
- * declares all four of its outputs with a dynamic shape, so neither the tensor
- * name nor the shape settles it.
- *
- * What does settle it is that a score is a confidence in [0, 1] while a class
- * index is a whole number that routinely exceeds 1. That test now runs on every
- * frame instead of being latched from the first one, because an early frame is
- * easily ambiguous -- an empty car makes both tensors all zeros -- and a wrong
- * latch is both unrecoverable and severe: every class index then reads as a
- * "confidence" that clears any threshold, so doors, chairs and walls all report
- * as people. The remembered answer is only a tie-break for frames that carry no
- * evidence either way.
- */
 function resolveRoles(first: Float32Array, second: Float32Array, limit: number) {
   const conventional = { scores: second, classes: first };
   const flipped = { scores: first, classes: second };
@@ -263,16 +237,6 @@ function withinScope(
   if (height < scope.minBoxHeight) return false;
   if (width * height > scope.maxArea) return false;
 
-  // Shape gate. A standing person is taller than they are wide, a bench or a bag
-  // is not, and a door edge is a sliver far taller than it is wide.
-  //
-  // Box coordinates are fractions of the frame, so height/width in those units
-  // carries the frame's own shape along with the box's. The camera is locked to
-  // landscape, which stretches that ratio by the frame aspect: a person who is
-  // genuinely about 4:1 in pixels reads as roughly 7:1 in frame fractions, and a
-  // ceiling set against the real ratio would throw away nearly everybody.
-  // Dividing the frame aspect back out compares pixels with pixels. A frame of
-  // unknown shape skips the gate rather than guessing.
   if (frameAspect > 0 && width > 0) {
     const aspect = height / width / frameAspect;
     if (aspect < scope.minAspect) return false;
@@ -302,12 +266,6 @@ export function acceptedBy(
   return null;
 }
 
-/**
- * The cheap pre-filter applied while the output tensors are still being read. It
- * has to admit anything any scope could later accept, so it takes the loosest
- * score and size of the set. Shape and region are left to withinScope, which
- * sees a box only after duplicates have been merged.
- */
 function loosestGate(scopes: readonly PersonScope[]) {
   return scopes.reduce(
     (gate, scope) => ({
@@ -323,23 +281,6 @@ function loosestGate(scopes: readonly PersonScope[]) {
   );
 }
 
-/**
- * Collapses the several boxes a single person produces into one.
- *
- * The model does run its own non-maximum suppression, but person-detector.tflite
- * bakes nms_iou_threshold at 0.6 and nms_score_threshold at 1e-8, so it discards
- * a box only when it overlaps a stronger one by more than 60%, and it never
- * filters on confidence at all. Somebody standing sideways produces a torso box
- * and a whole-body box overlapping by roughly 40-55%, and raising an arm adds a
- * third reaching further out again. All of them fall under 60%, so all of them
- * survive, and each one becomes its own track downstream.
- *
- * Boxes are taken strongest first. A weaker box is absorbed when it either
- * overlaps the winner past nmsIouThreshold or lies largely inside it, and the
- * winner widens over it so the survivor covers the whole person instead of
- * leaving a sliver for the tracker to adopt. The growth cap stops a chain of
- * merges from swallowing somebody standing alongside.
- */
 export function dropGroupBoxes(boxes: PersonBox[]): PersonBox[] {
   if (boxes.length < 3) return boxes;
 
@@ -468,10 +409,6 @@ function decodeSsd(
     secondPair.length,
   );
 
-  // How many slots the post-process filled. Treated as an upper bound only when
-  // it is positive: an export that leaves this at zero while still returning
-  // usable detections would otherwise have counting switched off entirely, and
-  // the score gate below already discards whatever stale slots hold.
   const reported = Math.trunc(countTensor[0] ?? 0);
   const limit = reported > 0 ? Math.min(reported, available) : available;
 
@@ -486,8 +423,6 @@ function decodeSsd(
     const classIndex = Math.round(roles.classes[index]);
     if (!Number.isFinite(classIndex) || classIndex !== PERSON_CLASS_INDEX) continue;
 
-    // Recorded before the threshold, so the diagnostics can show a person the
-    // model did see but the gate rejected.
     if (score > topScore) topScore = score;
     if (score < gate.minScore) continue;
 
@@ -613,8 +548,6 @@ export async function detectPeople(
       ? decodeYolo(outputs, plan, inputSize, letterbox, gate)
       : decodeSsd(outputs, plan, letterbox, gate);
 
-  // Merge before testing against the region, so the shape gates and the foot
-  // anchor are applied to a whole person rather than to each fragment of one.
   const boxes = kind === 'yolo' ? decoded.candidates : suppressDuplicates(decoded.candidates);
   const frameAspect = frame.height > 0 ? frame.width / frame.height : 0;
   let accepted = 0;

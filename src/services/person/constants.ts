@@ -27,26 +27,11 @@ export type PersonScope = {
   sustainScore: number;
   minBoxWidth: number;
   minBoxHeight: number;
-  /**
-   * Lowest and highest height/width a box may have, **measured in pixels**, not
-   * in the fractions the box coordinates use. The detector divides the frame's
-   * own aspect back out before comparing, because the camera is locked to
-   * landscape and a fraction-of-frame ratio carries that shape with it: an
-   * ordinary standing person reads as roughly 7:1 in those units and only about
-   * 4:1 in real pixels. Benches and bags fall below the floor; door edges and
-   * frame slivers rise above the ceiling.
-   */
   minAspect: number;
   maxAspect: number;
-  /** Largest share of the frame one person may occupy, as a fraction of frame area. */
   maxArea: number;
 };
 
-/**
- * Partial bodies: the anchor is the box centre, so a torso with the feet out of
- * frame still counts. This scope is the one that fires on furniture, so it asks
- * for the higher confidence of the two.
- */
 export const PERSON_SCOPE_HALF: PersonScope = {
   anchor: 'centre',
   minScore: 0.45,
@@ -58,11 +43,6 @@ export const PERSON_SCOPE_HALF: PersonScope = {
   maxArea: 0.9,
 };
 
-/**
- * Whole bodies standing on the car floor: the anchor is the foot edge. A box
- * this tall with its feet inside the region is far more likely to be a person,
- * so it is allowed a lower score as a safety net in poor light.
- */
 export const PERSON_SCOPE_FULL: PersonScope = {
   anchor: 'foot',
   minScore: 0.4,
@@ -116,18 +96,8 @@ export const PERSON_DETECTION = {
   frameQuality: 0.45,
   pictureSize: '1280x960',
 
-  /**
-   * Suppression applied on top of the model's own NMS. TFLite_Detection_PostProcess
-   * in person-detector.tflite is baked at nms_iou_threshold 0.6 and
-   * nms_score_threshold 1e-8, so it keeps every box that overlaps a stronger one by
-   * less than 60% and filters on confidence not at all. A person turned sideways
-   * yields a torso box and a body box that overlap by roughly 40-55%, which the
-   * model happily returns as two detections. These two gates collapse them.
-   */
   nmsIouThreshold: 0.45,
-  /** Intersection over the smaller box. Catches a part nested inside a whole. */
   containmentThreshold: 0.8,
-  /** A merged box may not grow past this multiple of the box that absorbed it. */
   maxMergeGrowth: 1.6,
 
   groupMemberMinShare: 0.2,
@@ -140,11 +110,9 @@ export const PERSON_DETECTION = {
   trackCentreMatch: 0.6,
   trackReacquireCentre: 1.2,
   trackCentreFloor: 0.06,
-  /** Consecutive frames a new box must survive before it counts as a person. */
   trackConfirmFrames: 3,
   trackForgetMs: 5000,
   trackCountGraceMs: 2500,
-  /** Two confirmed tracks overlapping this much (over the smaller) are one person. */
   trackOverlapThreshold: 0.8,
   stableFrames: 3,
   detectorFailureLimit: 6,
@@ -155,11 +123,6 @@ export const PERSON_DETECTION = {
   boxGlideMinMs: 80,
   boxGlideMaxMs: 600,
 
-  /**
-   * Draws the per-stage detection counts over the camera, so a frame that counts
-   * nobody can be traced to the stage that dropped them rather than guessed at.
-   * Turn off once the thresholds above are settled for the car.
-   */
   showDiagnostics: true,
 } as const;
 

@@ -27,12 +27,6 @@ export function intersectionOverUnion(a: Rect, b: Rect): number {
   return union > 0 ? overlap / union : 0;
 }
 
-/**
- * Overlap measured against the smaller of the two boxes. Intersection over union
- * collapses towards zero when one box is nested inside a much larger one -- a
- * head-and-torso box inside a whole-body box scores about 0.35 IoU but 1.0 here,
- * which is what separates "a part of that person" from "a second person".
- */
 export function intersectionOverSmaller(a: Rect, b: Rect): number {
   const overlap = overlapArea(a, b);
   if (overlap <= 0) return 0;
