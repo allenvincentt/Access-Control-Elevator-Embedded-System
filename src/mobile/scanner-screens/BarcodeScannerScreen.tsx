@@ -20,11 +20,11 @@ import { colors, spacing, typography } from "@/constants/themeColor";
 import { getDeviceId } from "@/lib/deviceId";
 import { DENIAL_MESSAGES, errorMessage } from "@/lib/errors";
 import { announceAccessDenied, announceAccessGranted } from "@/lib/speech";
-import { checkBarcodeFloor, verifyBarcode } from "@/services/verificationService";
+import { readBarcodeFloors, verifyBarcode } from "@/services/verificationService";
 import type { FloorKey } from "@/types/database";
 
 export type BarcodeScannerScreenProps = {
-  onVerified: (session: VerificationSession) => void;
+  onVerified: (session: VerificationSession, floors: FloorKey[]) => void;
   onExit: () => void;
   notice?: ReactNode;
   locked?: boolean;
@@ -97,18 +97,18 @@ export function BarcodeScannerScreen({
         const result = await verifyBarcode(raw, deviceId);
         if (!mounted.current) return;
 
-        if (result.ok && requiredFloor) {
-          const shared = await checkBarcodeFloor(
+        if (result.ok) {
+          const access = await readBarcodeFloors(
             result.session_token,
             requiredFloor,
             deviceId,
           );
           if (!mounted.current) return;
-          if (!shared.ok) {
+          if (!access.ok) {
             const message =
-              shared.reason === "FloorNotAuthorized"
+              access.reason === "FloorNotAuthorized" && requiredFloor
                 ? `${result.staff.full_name} is not cleared for ${floorShortLabel(requiredFloor)}, the floor this ride is locked to. Wait for the next ride.`
-                : DENIAL_MESSAGES[shared.reason];
+                : DENIAL_MESSAGES[access.reason];
             setStatus("error");
             setAttempts((count) => count + 1);
             setDenial(message);
@@ -117,9 +117,7 @@ export function BarcodeScannerScreen({
             rearmAfterDenial();
             return;
           }
-        }
 
-        if (result.ok) {
           setStatus("success");
           announceAccessGranted();
           snackbar.show(`Badge verified — ${result.staff.full_name}`, {
@@ -127,13 +125,16 @@ export function BarcodeScannerScreen({
           });
           setTimeout(() => {
             if (!mounted.current) return;
-            onVerified({
-              token: result.session_token,
-              expiresAt: result.expires_at,
-              staffName: result.staff.full_name,
-              companyId: result.staff.company_id,
-              role: result.staff.role,
-            });
+            onVerified(
+              {
+                token: result.session_token,
+                expiresAt: result.expires_at,
+                staffName: result.staff.full_name,
+                companyId: result.staff.company_id,
+                role: result.staff.role,
+              },
+              access.authorized_floors,
+            );
           }, 600);
           return;
         }
@@ -252,7 +253,7 @@ export function BarcodeScannerScreen({
                   <Text style={styles.panelTitle}>Barcode verified</Text>
                 </View>
                 <Text style={styles.panelBody}>
-                  Continuing to face verification…
+                  Opening the elevator door…
                 </Text>
               </>
             ) : locked ? null : (

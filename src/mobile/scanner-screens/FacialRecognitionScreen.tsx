@@ -585,12 +585,12 @@ export function FacialRecognitionScreen({
       reason="The door terminal needs the front camera to recognise people as they walk up."
     >
       <ScannerScaffold
-        step="Step 2 of 3"
+        step="Step 3 of 3"
         title={isGuest ? 'Guest photo' : 'Face verification'}
         subtitle={`${session.staffName} · ${session.companyId}`}
         onExit={onCancel}
-        exitIcon="back"
-        exitLabel="Back to barcode"
+        exitIcon="close"
+        exitLabel="Cancel ride"
         panelStyle={live ? styles.livePanel : undefined}
         onPanelHeight={setPanelHeight}
         camera={
@@ -625,7 +625,7 @@ export function FacialRecognitionScreen({
                   color={colors.success}
                   title={isGuest ? 'Guest checked in' : 'Identity confirmed'}
                 />
-                <Text style={styles.body}>Releasing the elevator door…</Text>
+                <Text style={styles.body}>Handing over to the occupancy check…</Text>
               </>
             ) : phase === 'halted' ? (
               <>
@@ -637,7 +637,7 @@ export function FacialRecognitionScreen({
                 <HintRow tone="danger" title="What happened">
                   {halt?.body ?? 'The scanner cannot continue.'}
                 </HintRow>
-                <GeneralButton label="Back to barcode" icon="back" fullWidth onPress={onCancel} />
+                <GeneralButton label="Cancel ride" icon="close" fullWidth onPress={onCancel} />
               </>
             ) : phase === 'denied' ? (
               <>
@@ -657,7 +657,7 @@ export function FacialRecognitionScreen({
                   </Text>
                 ) : null}
                 <GeneralButton
-                  label="Back to barcode"
+                  label="Cancel ride"
                   variant="ghost"
                   size="sm"
                   onPress={onCancel}

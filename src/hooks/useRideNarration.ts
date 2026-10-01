@@ -2,6 +2,8 @@ import { useEffect, useRef } from 'react';
 
 import {
   announceDetectorOffline,
+  announceFaceCheck,
+  announceFaceFailed,
   announceHoldExpired,
   announceOccupancyMismatch,
   announcePickFloor,
@@ -38,12 +40,16 @@ export function useRideNarration(boarding: BoardingStatus | null, enabled: boole
         announceHoldExpired();
       } else if (boarding.fault === 'wrong_floor') {
         announceWrongFloor();
+      } else if (boarding.fault === 'face_failed') {
+        announceFaceFailed();
       }
     }
 
     if (boarding.phase !== lastPhase.current) {
       if (boarding.phase === 'cleared' && lastPhase.current === 'counting') {
         announceRideCleared();
+      } else if (boarding.phase === 'verifying' && lastPhase.current === 'boarding') {
+        announceFaceCheck();
       }
       lastPhase.current = boarding.phase;
     }

@@ -1,7 +1,7 @@
 import { AppError, toAppError } from '@/lib/errors';
 import { supabase } from '@/lib/supabase';
 import type {
-  BarcodeFloorCheckResult,
+  BarcodeFloorsResult,
   BarcodeVerificationResult,
   FaceVerificationResult,
   FloorAccessResult,
@@ -105,21 +105,37 @@ export async function commitFloorAccess(
   return data as unknown as FloorAccessResult;
 }
 
-export async function checkBarcodeFloor(
+export async function reportOccupancyMismatch(
   sessionToken: string,
-  floor: FloorKey,
+  floor: FloorKey | null,
   deviceId: string,
-): Promise<BarcodeFloorCheckResult> {
-  const { data, error } = await supabase.rpc('barcode_session_covers_floor', {
+): Promise<void> {
+  if (!/^[0-9a-f]{64}$/.test(sessionToken)) return;
+
+  const { error } = await supabase.rpc('report_occupancy_mismatch', {
     p_session_token: sessionToken,
     p_floor: floor,
     p_device_id: deviceId,
   });
 
-  if (error) throw toAppError(error, 'The badge could not be checked against this ride.');
-  if (!data) throw new AppError('NO_RESULT', 'The badge could not be checked against this ride.');
+  if (error) throw toAppError(error, 'The head count mismatch could not be recorded.');
+}
 
-  return data as unknown as BarcodeFloorCheckResult;
+export async function readBarcodeFloors(
+  sessionToken: string,
+  requiredFloor: FloorKey | null,
+  deviceId: string,
+): Promise<BarcodeFloorsResult> {
+  const { data, error } = await supabase.rpc('barcode_session_floors', {
+    p_session_token: sessionToken,
+    p_required_floor: requiredFloor,
+    p_device_id: deviceId,
+  });
+
+  if (error) throw toAppError(error, 'The badge floors could not be read.');
+  if (!data) throw new AppError('NO_RESULT', 'The badge floors could not be read.');
+
+  return data as unknown as BarcodeFloorsResult;
 }
 
 export async function cancelVerificationSession(sessionToken: string | null): Promise<void> {
