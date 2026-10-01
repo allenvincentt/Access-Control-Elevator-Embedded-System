@@ -97,11 +97,6 @@ export class PersonTracker {
     const matchedTracks = new Set<number>();
     const matchedCandidates = new Set<number>();
 
-    // Every track/candidate pair is scored first and the best ones are taken in
-    // order. Walking the tracks one at a time and letting each keep its first
-    // acceptable candidate lets whichever track happens to come first claim a box
-    // that belongs to another, which strands the rightful track and spawns a
-    // duplicate for the box it should have kept.
     const pairings: Pairing[] = [];
     for (let track = 0; track < this.tracks.length; track += 1) {
       for (let candidate = 0; candidate < candidates.length; candidate += 1) {
@@ -144,11 +139,6 @@ export class PersonTracker {
       const candidate = candidates[index];
       if (!candidate.strong) continue;
 
-      // A box sitting largely inside a track that is already live is another view
-      // of that same person, not a new one. Matching on union alone misses this:
-      // a torso box nested in a whole-body box scores well below the match
-      // threshold, so without this check a person turning sideways opens a second
-      // track while the first is still running.
       const fragment = this.tracks.some((track) => this.sameArea(track.box, candidate));
       if (fragment) continue;
 
@@ -166,11 +156,6 @@ export class PersonTracker {
 
     this.collapseOverlapping();
 
-    // A track counts once it has been seen on trackConfirmFrames frames in a row,
-    // which is what keeps a single-frame flicker on a door or a chair from moving
-    // the number. The grace on misses is the other half of it: dropping a track
-    // the instant one frame fails to find it made the count sag and recover
-    // constantly while somebody moved, so it never settled.
     const counted = this.tracks.filter(
       (track) => track.confirmed && now - track.seenAt <= PERSON_DETECTION.trackCountGraceMs,
     );
@@ -203,15 +188,6 @@ export class PersonTracker {
     return intersectionOverSmaller(a, b) >= PERSON_DETECTION.trackOverlapThreshold;
   }
 
-  /**
-   * Drops a track that has drifted onto the same person as a longer-lived one.
-   * Frame-level suppression cannot catch this on its own, because a split that
-   * alternates between frames leaves two tracks that are each valid in isolation.
-   *
-   * The trade-off is that somebody standing directly behind another person, close
-   * enough for their visible box to be mostly covered, merges into one. Raise
-   * trackOverlapThreshold if a car is deep enough for that to be the common case.
-   */
   private collapseOverlapping() {
     const ordered = [...this.tracks].sort((a, b) => b.hits - a.hits || a.id - b.id);
     const survivors: PersonTrack[] = [];

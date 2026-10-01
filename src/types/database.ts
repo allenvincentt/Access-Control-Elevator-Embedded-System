@@ -177,9 +177,7 @@ export type DashboardStats = {
 };
 
 export type HomeOverviewDay = {
-  /** ISO date (YYYY-MM-DD) in the requested timezone. */
   day: string;
-  /** Short weekday label, e.g. "Mon". */
   weekday: string;
   attempts: number;
   granted: number;

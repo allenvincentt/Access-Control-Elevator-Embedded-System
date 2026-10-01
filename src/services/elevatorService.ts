@@ -19,7 +19,6 @@ const ACK_INTERVAL_MS = 70;
 const STAFF_NAME_MAX = 24;
 const HEARTBEAT_SAMPLE_MS = 400;
 const BOARDING_WATCH_MS = 700;
-/** Consecutive unreadable polls before the boarding watch calls the link down. */
 const BOARDING_FAULT_TOLERANCE = 3;
 
 export type ElevatorState = 'idle' | 'door_open' | 'traveling';
@@ -58,17 +57,12 @@ export type ElevatorStatus = {
   selectedFloor: FloorKey | null;
   sessionResult: ElevatorSessionResult;
   remainingMs: number;
-  /** Floor whose button was last pressed while not authorized on the active grant. */
   deniedFloor: FloorKey | null;
-  /** Increments each time `deniedFloor` fires, so pollers can detect a new denial. */
   deniedSeq: number;
-  /** BLE clients the controller currently has connected, this device included. */
   connectedClients: number;
-  /** Build marker reported by the controller, so a stale flash is visible. */
   firmware: string | null;
 };
 
-/** Bluetooth is a native-only capability; the web build reports false. */
 export const SCANNER_LINK_SUPPORTED = true;
 
 const ACK_FAILURES: Record<string, string> = {
@@ -116,11 +110,6 @@ function encodePayload(value: unknown): string {
   return bufferToBase64(bytes.buffer as ArrayBuffer);
 }
 
-/**
- * Returns the outermost balanced `{...}`, so the head of one payload can be
- * recovered when a second one has been spliced onto it. Quoting is tracked, so a
- * brace inside a string does not end the object early.
- */
 function balancedObject(text: string): string | null {
   const start = text.indexOf('{');
   if (start < 0) return null;
@@ -152,24 +141,6 @@ function balancedObject(text: string): string | null {
   return null;
 }
 
-/**
- * A read can hand back something that is not valid JSON even while the link is
- * perfectly healthy, so this never assumes the bytes parse.
- *
- * Current firmware keeps every payload within BLE_PACKET_MAX_BYTES (180), one
- * ATT packet. Older flashes published a status of up to 500 bytes, which is
- * fetched as a long read in several round trips; the sketch keeps one read
- * offset shared by every connected phone and resets it whenever the value is
- * rewritten, so the phone assembles the head of one payload onto the tail of
- * another. The splice usually lands inside a string, which is what surfaces as
- * "JSON Parse error: U+0000 thru U+001F is not allowed in string".
- *
- * Trailing NUL padding is dropped and the first balanced object is recovered
- * where one survives. What cannot be read raises ELEVATOR_BAD_PAYLOAD, which
- * pollers treat as a read to retry rather than as a command that failed.
- *
- * Exported so the recovery can be exercised directly; nothing else should call it.
- */
 export function decodePayload(value: string): Record<string, unknown> {
   let text: string;
   try {
@@ -196,8 +167,6 @@ export function decodePayload(value: string): Record<string, unknown> {
     } catch {
       continue;
     }
-    // An array parses as an object but is never a status or boarding payload,
-    // and accepting one would hand every reader a bag of undefined fields.
     if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
       return parsed as Record<string, unknown>;
     }
@@ -566,11 +535,6 @@ async function sendCommand(command: Record<string, unknown>): Promise<Record<str
       status = await readStatusPayload();
       answered += 1;
     } catch (error) {
-      // The write has already landed by this point, so a status read that comes
-      // back unreadable is a poll that failed, not a command that failed. The
-      // controller rewrites the status characteristic from its main loop and a
-      // long read can catch it mid-update, which used to abort the command and
-      // report a Bluetooth failure for a door that had in fact just opened.
       readFault = error;
       await delay(ACK_INTERVAL_MS);
       continue;
@@ -584,8 +548,6 @@ async function sendCommand(command: Record<string, unknown>): Promise<Record<str
     await delay(ACK_INTERVAL_MS);
   }
 
-  // Nothing readable came back at all, so report the link itself rather than
-  // going on to diagnose an acknowledgement that was never observable.
   if (answered === 0 && readFault !== null) throw unreachable(readFault);
 
   throw await unacknowledged(cmdId);
@@ -626,10 +588,7 @@ function parseStatus(payload: Record<string, unknown>): ElevatorStatus {
     sessionResult: readSessionResult(pick(payload, 'sr', 'session_result')),
     remainingMs: Number.isFinite(remaining) ? Math.max(0, remaining) : 0,
     deniedFloor: readFloor(pick(payload, 'df', 'denied_floor')),
-    // Firmware before this build omits "denied_seq"; treat that as "no denials yet".
     deniedSeq: Number.isFinite(deniedSeq) ? Math.max(0, Math.trunc(deniedSeq)) : 0,
-    // Firmware before the multi-client build omits "clients"; treat that as
-    // "just this link".
     connectedClients: Number.isFinite(clients) ? Math.max(0, Math.trunc(clients)) : 1,
     firmware: typeof payload.fw === 'string' && payload.fw ? payload.fw : null,
   };
@@ -768,9 +727,6 @@ export function watchBoarding(
       consecutiveFaults = 0;
       if (!cancelled) listener(status);
     } catch (error) {
-      // One unreadable poll is normal: the controller rewrites its status
-      // characteristic constantly, so a read can land mid-update. Only a run of
-      // them means the link is actually down, and a later good read clears it.
       consecutiveFaults += 1;
       if (!cancelled && consecutiveFaults >= BOARDING_FAULT_TOLERANCE) {
         onError?.(unreachable(error));
@@ -794,14 +750,6 @@ export async function readElevatorStatus(): Promise<ElevatorStatus> {
   return parseStatus(await readStatusPayload());
 }
 
-/**
- * How many scanner terminals are on the controller's Bluetooth link right now.
- *
- * The controller counts every connected BLE client, and reading its status
- * makes this admin device one of them, so the monitoring link is subtracted
- * back out. Scanners are never registered anywhere — a phone that is connected
- * is counted, a phone that walks away stops being counted.
- */
 export async function readConnectedScannerCount(): Promise<number> {
   const status = await readElevatorStatus();
   return Math.max(0, status.connectedClients - 1);

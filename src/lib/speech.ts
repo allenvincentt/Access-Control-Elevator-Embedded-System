@@ -18,7 +18,6 @@ export function announceAccessDenied(): void {
   speak('Access Denied');
 }
 
-/** Speaks a welcome using only the first word of the staff member's full name. */
 export function announceWelcome(fullName: string): void {
   const firstName = fullName.trim().split(/\s+/)[0];
   speak(firstName ? `Welcome ${firstName}` : 'Welcome');

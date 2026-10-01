@@ -14,7 +14,6 @@ import { colors, radius, spacing, typography } from '@/constants/themeColor';
 export type BarMeterProps = {
   label: string;
   value: number;
-  /** Share of the track to fill, 0–1. */
   ratio: number;
   color?: string;
   trackColor?: string;
@@ -25,10 +24,6 @@ export type BarMeterProps = {
 const FILL_DURATION = 820;
 const MIN_VISIBLE_RATIO = 0.04;
 
-/**
- * Labelled horizontal meter used for rankings (floor traffic, denial reasons).
- * The fill runs on the UI thread, so a list of them stays at 60 FPS.
- */
 export function BarMeter({
   label,
   value,

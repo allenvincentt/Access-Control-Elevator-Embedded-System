@@ -10,7 +10,6 @@ export type TrendChartProps = {
   labels?: string[];
   height?: number;
   color?: string;
-  /** Accent dot; defaults to the highest point, matching the dashboard design. */
   markIndex?: number;
   animate?: boolean;
   animationDelay?: number;
@@ -20,7 +19,6 @@ export type TrendChartProps = {
 const TOP_PADDING = 10;
 const BOTTOM_PADDING = 8;
 
-/** Catmull-Rom control points, so the line curves without overshooting. */
 function smoothPath(coords: { x: number; y: number }[]): string {
   if (coords.length === 0) return '';
   if (coords.length === 1) return `M ${coords[0].x} ${coords[0].y}`;
@@ -46,12 +44,6 @@ function smoothPath(coords: { x: number; y: number }[]): string {
   return path;
 }
 
-/**
- * Compact area/line chart for a short series (a week of daily counts).
- *
- * Width comes from layout rather than a fixed viewBox, so the curve keeps its
- * stroke weight from a 320px phone to a full-width desktop panel.
- */
 export function TrendChart({
   points,
   labels,
@@ -63,7 +55,6 @@ export function TrendChart({
   accessibilityLabel,
 }: TrendChartProps) {
   const [width, setWidth] = useState(0);
-  // Gradient ids share one document per platform, so keep them instance unique.
   const fillId = `trend-fill-${useId().replace(/[^a-zA-Z0-9]/g, '')}`;
   const progress = useAnimatedNumber(1, { delay: animationDelay, enabled: animate });
 

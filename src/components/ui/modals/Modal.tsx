@@ -88,7 +88,6 @@ export function Modal({
     if (visible) {
       openedRef.current = true;
       dragY.set(0);
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- mount for the enter animation
       setMounted(true);
       progress.set(withTiming(1, { duration: OPEN_DURATION, easing: Easing.out(Easing.cubic) }));
       return;
@@ -100,9 +99,6 @@ export function Modal({
   }, [visible, progress, dragY]);
 
   useEffect(() => {
-    // Chromium doesn't always composite `backdrop-filter` on a freshly mounted
-    // layer — it stays flat until something forces a relayout (e.g. a window
-    // resize). Nudge that relayout ourselves right after the backdrop mounts.
     if (Platform.OS !== 'web' || !mounted || typeof window === 'undefined') return;
     const frame = requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
     return () => cancelAnimationFrame(frame);
@@ -184,8 +180,6 @@ export function Modal({
       <ModalNestingContext.Provider value={true}>
         <GestureHandlerRootView style={styles.root}>
           <View style={styles.backdrop} pointerEvents="box-none">
-            {/* Kept at a constant opacity — animating this layer's opacity is what
-                stops Chromium from compositing `backdrop-filter` on first paint. */}
             {showBackdropBlur ? (
               <BlurView
                 style={StyleSheet.absoluteFill}

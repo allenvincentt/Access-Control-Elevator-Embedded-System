@@ -8,7 +8,6 @@ import {
 } from '@/services/dashboardService';
 import type { HomeOverview } from '@/types/database';
 
-/** Silent background refresh, so the dashboard stays close to live. */
 const AUTO_REFRESH_MS = 60_000;
 
 export function useHomeOverview() {

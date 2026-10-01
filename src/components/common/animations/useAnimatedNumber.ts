@@ -15,15 +15,6 @@ export type AnimatedNumberOptions = {
   enabled?: boolean;
 };
 
-/**
- * Eases a plain JavaScript number towards `value`.
- *
- * Reanimated drives the timing, so the curve matches the rest of the system's
- * motion, while the result stays a normal number that SVG geometry can be
- * derived from on any platform. Use the shared-value hooks directly whenever a
- * plain View can be animated instead — this exists for the chart paths that
- * have to be recomputed to move.
- */
 export function useAnimatedNumber(
   value: number,
   { duration = 980, delay = 0, enabled = true }: AnimatedNumberOptions = {},
@@ -47,8 +38,6 @@ export function useAnimatedNumber(
     },
   );
 
-  // With animation off the target is reported straight through, so nothing has
-  // to be written to state to settle on it.
   return enabled ? current : value;
 }
 
