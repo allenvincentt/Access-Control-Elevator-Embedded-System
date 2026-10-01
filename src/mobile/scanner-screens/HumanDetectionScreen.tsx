@@ -499,13 +499,17 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
 
 function idleTitle(phase: string | undefined): string {
   if (phase === "boarding") return "Boarding";
+  if (phase === "verifying") return "Checking faces";
   if (phase === "cleared") return "Cleared to travel";
   return "Standing by";
 }
 
 function idleBody(phase: string | undefined, expected: number): string {
   if (phase === "boarding") {
-    return `${expected} verified so far. Pick a floor, then press the door button to start the count.`;
+    return `${expected} scanned so far. Pick a floor, then press the door button to start the face check.`;
+  }
+  if (phase === "verifying") {
+    return `The door is closed. Counting starts once all ${expected} rider${expected === 1 ? "" : "s"} confirm their faces on the scanner.`;
   }
   if (phase === "cleared") {
     return "The controller released the car. Counting stops until the next ride.";

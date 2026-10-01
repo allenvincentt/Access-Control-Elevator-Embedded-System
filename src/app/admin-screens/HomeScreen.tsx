@@ -1,7 +1,6 @@
 import {
   memo,
   useCallback,
-  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -61,7 +60,6 @@ import { DENIAL_LABELS } from "@/lib/errors";
 import {
   MOST_ACTIVE_DAYS,
   type HomeInsights,
-  type LastEntry,
 } from "@/services/dashboardService";
 import type {
   ActivityEntry,
@@ -297,7 +295,7 @@ function DeltaCaption({
       >
         {flat
           ? "Level with yesterday"
-          : `${Math.abs(delta).toFixed(0)}% vs yesterday`}
+          : `${Math.min(Math.abs(delta), 100).toFixed(0)}% vs yesterday`}
       </Text>
     </View>
   );
@@ -582,56 +580,6 @@ const Dashboard = memo(function Dashboard({
 
 /* ----------------------------------------------------------- sections ---- */
 
-function lastEntryName(entry: LastEntry): string {
-  return entry.staff_name_snapshot ?? `Badge ${entry.scanned_company_id}`;
-}
-
-function lastEntryMeta(entry: LastEntry): string {
-  const name = lastEntryName(entry);
-  return entry.floor ? `${name} · ${floorShortLabel(entry.floor)}` : name;
-}
-
-function sinceParts(iso: string, now: number): { value: string; unit: string } {
-  const then = new Date(iso).getTime();
-  const minutes = Math.floor((now - then) / 60_000);
-  if (minutes < 1) return { value: "Now", unit: "" };
-  if (minutes < 60) return { value: `${minutes}`, unit: "min ago" };
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return { value: `${hours}`, unit: hours === 1 ? "hr ago" : "hrs ago" };
-  const days = Math.floor(hours / 24);
-  if (days <= 7) return { value: `${days}`, unit: days === 1 ? "day ago" : "days ago" };
-  return {
-    value: new Date(then).toLocaleDateString(undefined, {
-      month: "short",
-      day: "numeric",
-    }),
-    unit: "",
-  };
-}
-
-function LastEntryValue({ entry }: { entry: LastEntry | null }) {
-  const [now, setNow] = useState(() => Date.now());
-
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(timer);
-  }, []);
-
-  if (!entry) {
-    return <Text style={[styles.kpiValue, styles.kpiValueMuted]}>—</Text>;
-  }
-
-  const since = sinceParts(entry.occurred_at, now);
-  return (
-    <>
-      <Text style={styles.kpiValue} numberOfLines={1}>
-        {since.value}
-      </Text>
-      {since.unit ? <Text style={styles.kpiValueMuted}>{since.unit}</Text> : null}
-    </>
-  );
-}
-
 type AttemptsRange = "weekly" | "monthly";
 
 const ATTEMPT_RANGES: { key: AttemptsRange; label: string }[] = [
@@ -785,6 +733,10 @@ function KpiGrid({
     ? insights.lockouts.face + insights.lockouts.badge
     : null;
 
+  const suspicious = insights?.suspicious
+    ? insights.suspicious.proxy + insights.suspicious.tailgating
+    : null;
+
   const item = { width: itemWidth };
   const leadSpans = columns === 2;
   const firstItem = leadSpans ? styles.full : item;
@@ -886,26 +838,33 @@ function KpiGrid({
       />
 
       <KpiCard
-        icon="time"
-        label="Last entry"
-        tone="info"
+        icon="visible"
+        label="Suspicious entries"
+        tone="warning"
         delay={280}
         style={lastItem}
         accessibilityLabel={
-          insights?.lastEntry
-            ? `Last entry ${relativeTime(insights.lastEntry.occurred_at)} by ${lastEntryName(insights.lastEntry)}`
-            : "No entries yet"
+          suspicious == null
+            ? "Suspicious entry count unavailable"
+            : `${suspicious} suspicious entries today`
         }
-        value={<LastEntryValue entry={insights?.lastEntry ?? null} />}
+        value={
+          suspicious == null ? (
+            <Text style={[styles.kpiValue, styles.kpiValueMuted]}>—</Text>
+          ) : (
+            <CountUp value={suspicious} style={styles.kpiValue} />
+          )
+        }
         caption={
           <KpiCaption
             text={
-              !insights
+              !insights?.suspicious
                 ? "Could not be loaded"
-                : insights.lastEntry
-                  ? lastEntryMeta(insights.lastEntry)
-                  : "No one has entered yet"
+                : suspicious
+                  ? `${insights.suspicious.proxy} proxy · ${insights.suspicious.tailgating} tailgating`
+                  : "No suspicious entries today"
             }
+            tone={suspicious ? "warning" : undefined}
           />
         }
       />
@@ -1083,6 +1042,7 @@ const DENIAL_ICONS: Record<DenialReason, IconName> = {
   TerminalNotConfigured: "settings",
   NotAuthorized: "shield",
   InvalidInput: "error",
+  OccupancyMismatch: "visible",
 };
 
 function DenialReasonsPanel({

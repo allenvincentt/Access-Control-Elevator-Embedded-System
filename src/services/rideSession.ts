@@ -6,9 +6,14 @@ import {
   openDoorForStaff,
   readBoardingStatus,
   readElevatorStatus,
+  reportFaceCheck,
   type BoardingStatus,
 } from '@/services/elevatorService';
-import { cancelVerificationSession, commitFloorAccess } from '@/services/verificationService';
+import {
+  cancelVerificationSession,
+  commitFloorAccess,
+  reportOccupancyMismatch,
+} from '@/services/verificationService';
 import type { FloorKey, StaffRoleKey } from '@/types/database';
 
 export type Rider = {
@@ -16,7 +21,9 @@ export type Rider = {
   name: string;
   companyId: string;
   role: StaffRoleKey;
+  expiresAt: string;
   floors: FloorKey[];
+  faceVerified: boolean;
 };
 
 export type RideResult = 'arrived' | 'timeout' | 'cancelled';
@@ -60,6 +67,7 @@ let boardingInFlight = false;
 let pollFailures = 0;
 let boardingFailures = 0;
 let settling = false;
+let overCounted = false;
 
 function emit(patch: Partial<RideState>) {
   state = { ...state, ...patch };
@@ -111,15 +119,29 @@ async function releaseTokens(riders: Rider[]) {
   }
 }
 
+async function flagOverCount(riders: Rider[], floor: FloorKey | null) {
+  if (!overCounted) return;
+  overCounted = false;
+  const lead = riders[0];
+  if (!lead) return;
+  try {
+    await reportOccupancyMismatch(lead.token, floor, await getDeviceId());
+  } catch {
+    return;
+  }
+}
+
 async function settle(result: RideResult, floor: FloorKey | null) {
   if (settling) return;
   settling = true;
   stopWatchers();
 
   const riders = state.riders;
+  const lockedFloor = state.boarding?.lockedFloor ?? null;
   emit({ riders: [], outcome: { result, floor, riders: riders.length } });
 
   try {
+    await flagOverCount(riders, floor ?? lockedFloor);
     if (result === 'arrived' && floor) {
       await commitTrips(riders, floor);
     } else {
@@ -160,7 +182,10 @@ async function pollStatus() {
 }
 
 function dropRejectedRiders(boarding: BoardingStatus, ridersAtRead: number) {
-  const active = boarding.phase === 'boarding' || boarding.phase === 'counting';
+  const active =
+    boarding.phase === 'boarding' ||
+    boarding.phase === 'verifying' ||
+    boarding.phase === 'counting';
   if (!active || ridersAtRead !== state.riders.length || boarding.expected >= ridersAtRead) {
     return;
   }
@@ -178,6 +203,13 @@ async function pollBoarding() {
     const boarding = await readBoardingStatus();
     boardingFailures = 0;
     dropRejectedRiders(boarding, ridersAtRead);
+    if (
+      boarding.phase === 'counting' &&
+      state.riders.length > 0 &&
+      boarding.peak > boarding.expected
+    ) {
+      overCounted = true;
+    }
     emit({ boarding, boardingError: null, boardingCheck: null });
   } catch (error) {
     boardingFailures += 1;
@@ -205,6 +237,7 @@ function ensureWatchers() {
 }
 
 export async function joinRide(rider: Rider): Promise<void> {
+  if (state.riders.length === 0) overCounted = false;
   emit({ error: null, outcome: null });
   try {
     await openDoorForStaff(rider.token, rider.floors, rider.name);
@@ -219,11 +252,37 @@ export async function joinRide(rider: Rider): Promise<void> {
   void pollBoarding();
 }
 
+export function markFaceVerified(token: string) {
+  emit({
+    riders: state.riders.map((rider) =>
+      rider.token === token ? { ...rider, faceVerified: true } : rider,
+    ),
+  });
+}
+
+export async function confirmFaces(): Promise<void> {
+  await reportFaceCheck(true);
+  void pollBoarding();
+}
+
+export async function failFaces(): Promise<void> {
+  try {
+    await reportFaceCheck(false);
+  } catch {
+    return;
+  } finally {
+    void pollStatus();
+    void pollBoarding();
+  }
+}
+
 export async function abandonRide(): Promise<void> {
   const riders = state.riders;
+  const lockedFloor = state.boarding?.lockedFloor ?? null;
   stopWatchers();
   emit({ riders: [], boarding: null, boardingError: null, boardingCheck: null, error: null });
   await cancelElevatorSession();
+  await flagOverCount(riders, lockedFloor);
   await releaseTokens(riders);
 }
 

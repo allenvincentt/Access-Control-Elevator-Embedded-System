@@ -3,7 +3,7 @@ import type { FloorKey } from '@/types/database';
 
 export type ElevatorState = 'idle' | 'door_open' | 'traveling';
 export type ElevatorSessionResult = 'none' | 'arrived' | 'timeout' | 'cancelled';
-export type RidePhase = 'idle' | 'boarding' | 'counting' | 'cleared';
+export type RidePhase = 'idle' | 'boarding' | 'verifying' | 'counting' | 'cleared';
 export type RideFault =
   | 'none'
   | 'mismatch'
@@ -11,12 +11,14 @@ export type RideFault =
   | 'cancelled'
   | 'no_floor'
   | 'hold_expired'
-  | 'wrong_floor';
+  | 'wrong_floor'
+  | 'face_failed';
 
 export type BoardingStatus = {
   phase: RidePhase;
   expected: number;
   observed: number;
+  peak: number;
   attempt: number;
   maxAttempts: number;
   deadlineMs: number;
@@ -70,6 +72,10 @@ export async function readConnectedScannerCount(): Promise<number> {
 }
 
 export async function cancelElevatorSession(): Promise<void> {
+  unsupported();
+}
+
+export async function reportFaceCheck(_passed: boolean): Promise<void> {
   unsupported();
 }
 

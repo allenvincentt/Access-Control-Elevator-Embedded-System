@@ -33,10 +33,7 @@ export const MOST_ACTIVE_DAYS = 7;
 export const MOST_ACTIVE_LIMIT = 5;
 const MOST_ACTIVE_SCAN_CAP = 5000;
 
-export type LastEntry = Pick<
-  AccessLogRow,
-  'occurred_at' | 'staff_name_snapshot' | 'scanned_company_id' | 'floor'
->;
+export type SuspiciousEntries = { proxy: number; tailgating: number };
 
 export type MonthTally = {
   key: string;
@@ -55,7 +52,7 @@ export type ActiveStaff = {
 
 export type HomeInsights = {
   lockouts: { face: number; badge: number };
-  lastEntry: LastEntry | null;
+  suspicious: SuspiciousEntries | null;
   months: MonthTally[];
   mostActive: ActiveStaff[];
 };
@@ -148,14 +145,9 @@ export async function fetchHomeInsights(now = new Date()): Promise<HomeInsights>
     ),
   );
 
-  const lastEntryQuery = supabase
-    .from('access_logs')
-    .select('occurred_at, staff_name_snapshot, scanned_company_id, floor')
-    .eq('stage', 'Face')
-    .eq('decision', 'Granted')
-    .order('occurred_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const suspiciousQuery = supabase
+    .rpc('admin_suspicious_entries', { p_since: todayStart })
+    .then(({ data, error }) => (error || !data ? null : (data as SuspiciousEntries)));
 
   const scansQuery = supabase
     .from('access_logs')
@@ -166,24 +158,21 @@ export async function fetchHomeInsights(now = new Date()): Promise<HomeInsights>
     .order('occurred_at', { ascending: false })
     .limit(MOST_ACTIVE_SCAN_CAP);
 
-  const [face, badge, lastEntryResult, scansResult, ...attempts] = await Promise.all([
+  const [face, badge, suspicious, scansResult, ...attempts] = await Promise.all([
     lockout('TooManyAttempts'),
     lockout('RateLimited'),
-    lastEntryQuery,
+    suspiciousQuery,
     scansQuery,
     ...monthCounts,
   ]);
 
-  if (lastEntryResult.error) {
-    throw toAppError(lastEntryResult.error, 'The dashboard could not be loaded.');
-  }
   if (scansResult.error) {
     throw toAppError(scansResult.error, 'The dashboard could not be loaded.');
   }
 
   return {
     lockouts: { face, badge },
-    lastEntry: (lastEntryResult.data as LastEntry | null) ?? null,
+    suspicious,
     months: monthStarts.slice(0, -1).map((start, index) => ({
       key: `${start.getFullYear()}-${start.getMonth() + 1}`,
       label: start.toLocaleDateString(undefined, { month: 'short' }),

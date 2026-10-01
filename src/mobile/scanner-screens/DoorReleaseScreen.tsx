@@ -59,7 +59,9 @@ export function DoorReleaseScreen({
         name: session.staffName,
         companyId: session.companyId,
         role: session.role,
+        expiresAt: session.expiresAt,
         floors,
+        faceVerified: false,
       });
       if (!mounted.current) return;
 
@@ -85,6 +87,7 @@ export function DoorReleaseScreen({
     floors,
     onReleased,
     session.companyId,
+    session.expiresAt,
     session.role,
     session.staffName,
     session.token,
@@ -121,7 +124,7 @@ export function DoorReleaseScreen({
 
   return (
     <ScannerScaffold
-      step="Step 3 of 3"
+      step="Step 2 of 3"
       title="Door release"
       subtitle={`${session.staffName} · ${session.companyId}`}
       onExit={handleExit}
@@ -150,6 +153,10 @@ export function DoorReleaseScreen({
                 {floors.map((floor) => floorShortLabel(floor)).join(' · ')}
               </HintRow>
             )}
+            <HintRow tone="info" title="Then face check">
+              When the door closes, every rider confirms their face on this phone before the car
+              moves.
+            </HintRow>
             <GeneralButton
               label="Scan next badge"
               icon="qr"

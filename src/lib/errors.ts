@@ -47,6 +47,7 @@ export const DENIAL_MESSAGES: Record<DenialReason, string> = {
   TerminalNotConfigured: 'This terminal has no floor assigned. Ask an administrator to set one.',
   NotAuthorized: 'This terminal is not permitted to run verification.',
   InvalidInput: 'That code is not a valid staff barcode.',
+  OccupancyMismatch: 'More people were counted in the car than badges scanned.',
 };
 
 /** Chart- and chip-sized wording for the same reasons as DENIAL_MESSAGES. */
@@ -63,6 +64,7 @@ export const DENIAL_LABELS: Record<DenialReason, string> = {
   TerminalNotConfigured: 'Scanner not configured',
   NotAuthorized: 'Scanner not permitted',
   InvalidInput: 'Invalid badge code',
+  OccupancyMismatch: 'Head count mismatch',
 };
 
 function isPostgrestError(value: unknown): value is PostgrestError {

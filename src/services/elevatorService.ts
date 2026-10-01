@@ -24,7 +24,7 @@ const BOARDING_FAULT_TOLERANCE = 3;
 
 export type ElevatorState = 'idle' | 'door_open' | 'traveling';
 export type ElevatorSessionResult = 'none' | 'arrived' | 'timeout' | 'cancelled';
-export type RidePhase = 'idle' | 'boarding' | 'counting' | 'cleared';
+export type RidePhase = 'idle' | 'boarding' | 'verifying' | 'counting' | 'cleared';
 export type RideFault =
   | 'none'
   | 'mismatch'
@@ -32,12 +32,14 @@ export type RideFault =
   | 'cancelled'
   | 'no_floor'
   | 'hold_expired'
-  | 'wrong_floor';
+  | 'wrong_floor'
+  | 'face_failed';
 
 export type BoardingStatus = {
   phase: RidePhase;
   expected: number;
   observed: number;
+  peak: number;
   attempt: number;
   maxAttempts: number;
   deadlineMs: number;
@@ -83,6 +85,7 @@ const ACK_FAILURES: Record<string, string> = {
   floor_locked:
     'This badge is not cleared for the floor this ride is locked to. Wait for the next ride.',
   not_counting: 'The elevator controller is not waiting for an occupancy count right now.',
+  not_verifying: 'The elevator controller is not waiting for face verification right now.',
   bad_count: 'The elevator controller rejected that occupancy count.',
   too_long:
     'The command was too large for the elevator controller to accept. Shorten the staff name, or reflash the controller.',
@@ -633,7 +636,12 @@ function parseStatus(payload: Record<string, unknown>): ElevatorStatus {
 }
 
 function readRidePhase(value: unknown): RidePhase {
-  return value === 'boarding' || value === 'counting' || value === 'cleared' ? value : 'idle';
+  return value === 'boarding' ||
+    value === 'verifying' ||
+    value === 'counting' ||
+    value === 'cleared'
+    ? value
+    : 'idle';
 }
 
 function readRideFault(value: unknown): RideFault {
@@ -642,7 +650,8 @@ function readRideFault(value: unknown): RideFault {
     value === 'cancelled' ||
     value === 'no_floor' ||
     value === 'hold_expired' ||
-    value === 'wrong_floor'
+    value === 'wrong_floor' ||
+    value === 'face_failed'
     ? value
     : 'none';
 }
@@ -657,6 +666,7 @@ function parseBoarding(payload: Record<string, unknown>): BoardingStatus {
     phase: readRidePhase(payload.s),
     expected: countOf(payload.e, 0),
     observed: countOf(payload.o, 0),
+    peak: countOf(payload.p, 0),
     attempt: countOf(payload.a, 0),
     maxAttempts: countOf(payload.m, 3),
     deadlineMs: countOf(payload.t, 0),
@@ -697,6 +707,11 @@ export async function openDoorForStaff(
     staff: staffName.slice(0, STAFF_NAME_MAX),
   });
   return parseStatus(status);
+}
+
+export async function reportFaceCheck(passed: boolean): Promise<void> {
+  assertConfigured();
+  await sendCommand({ action: 'verify', passed: passed ? 1 : 0 });
 }
 
 export async function reportOccupancy(count: number): Promise<void> {

@@ -21,7 +21,8 @@ export type DenialReason =
   | 'RateLimited'
   | 'TerminalNotConfigured'
   | 'NotAuthorized'
-  | 'InvalidInput';
+  | 'InvalidInput'
+  | 'OccupancyMismatch';
 
 export type ProfileRow = {
   id: string;
@@ -127,7 +128,9 @@ export type BarcodeVerificationResult =
       staff?: VerifiedStaffSummary;
     };
 
-export type BarcodeFloorCheckResult = { ok: true } | { ok: false; reason: DenialReason };
+export type BarcodeFloorsResult =
+  | { ok: true; authorized_floors: FloorKey[] }
+  | { ok: false; reason: DenialReason };
 
 export type FaceVerificationResult =
   | {
@@ -278,13 +281,17 @@ export type Database = {
         Args: { p_session_token: string; p_floor: FloorKey; p_device_id: string };
         Returns: FloorAccessResult;
       };
-      barcode_session_covers_floor: {
-        Args: { p_session_token: string; p_floor: FloorKey; p_device_id: string };
-        Returns: BarcodeFloorCheckResult;
+      barcode_session_floors: {
+        Args: { p_session_token: string; p_required_floor: FloorKey | null; p_device_id: string };
+        Returns: BarcodeFloorsResult;
       };
       cancel_verification_session: {
         Args: { p_session_token: string };
         Returns: undefined;
+      };
+      report_occupancy_mismatch: {
+        Args: { p_session_token: string; p_floor: FloorKey | null; p_device_id: string };
+        Returns: { ok: boolean; reason?: DenialReason };
       };
       record_guest_face: {
         Args: { p_session_token: string; p_photo_path: string | null; p_device_id: string };
@@ -319,6 +326,10 @@ export type Database = {
       admin_home_overview: {
         Args: { p_timezone?: string };
         Returns: HomeOverview;
+      };
+      admin_suspicious_entries: {
+        Args: { p_since: string };
+        Returns: { proxy: number; tailgating: number };
       };
       is_admin: {
         Args: Record<PropertyKey, never>;

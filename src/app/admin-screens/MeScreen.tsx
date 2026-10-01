@@ -236,31 +236,17 @@ export function MeScreen() {
           </Panel>
         </View>
 
-        <ScrollReveal delay={280}>
-          <View style={[styles.session, wide && styles.sessionWide]}>
-            <View style={styles.sessionInfo}>
-              <View style={styles.sessionIcon}>
-                <Icon name="info" size={18} color={colors.info} />
-              </View>
-              <View style={styles.sessionText}>
-                <Text style={styles.sessionTitle}>Signed in on this device</Text>
-                <Text style={styles.sessionDetail}>
-                  Logging out ends this session. You’ll need your email and
-                  password to sign back in.
-                </Text>
-              </View>
-            </View>
-            {wide ? null : (
-              <GeneralButton
-                label="Log out"
-                icon="logout"
-                variant="danger"
-                fullWidth
-                onPress={openConfirm}
-              />
-            )}
-          </View>
-        </ScrollReveal>
+        {wide ? null : (
+          <ScrollReveal delay={280}>
+            <GeneralButton
+              label="Log out"
+              icon="logout"
+              variant="danger"
+              fullWidth
+              onPress={openConfirm}
+            />
+          </ScrollReveal>
+        )}
       </View>
 
       <MessageBoxModal
@@ -491,45 +477,6 @@ const styles = StyleSheet.create({
   permissionDetail: {
     color: colors.textMuted,
     ...typography.caption,
-  },
-  session: {
-    gap: spacing.md,
-    padding: spacing.base,
-    borderRadius: radius.lg,
-    backgroundColor: colors.infoTint,
-  },
-  sessionWide: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: spacing.lg,
-  },
-  sessionInfo: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.md,
-  },
-  sessionIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: radius.sm,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.surface,
-  },
-  sessionText: {
-    flex: 1,
-    minWidth: 0,
-    gap: spacing.hair,
-  },
-  sessionTitle: {
-    color: colors.text,
-    ...typography.label,
-  },
-  sessionDetail: {
-    color: colors.textSecondary,
-    ...typography.caption,
-    lineHeight: 17,
   },
 });
 

@@ -12,7 +12,7 @@ static const char *STATUS_CHAR_UUID = "6e6c0002-b5a3-f393-e0a9-e50e24dcca9e";
 static const char *COMMAND_CHAR_UUID = "6e6c0003-b5a3-f393-e0a9-e50e24dcca9e";
 static const char *BOARDING_CHAR_UUID = "6e6c0004-b5a3-f393-e0a9-e50e24dcca9e";
 static const char *DEVICE_KEY = "Elevator123";
-static const char *FIRMWARE_BUILD = "260926-1";
+static const char *FIRMWARE_BUILD = "260926-3";
 
 static const uint8_t INSIDE_FLOOR_BUTTON_COUNT = 3;
 static const uint8_t HALL_CALL_COUNT = 4;
@@ -64,6 +64,7 @@ static const uint32_t DEBOUNCE_MS = 30;
 
 static const uint32_t DOOR_HOLD_CAP_MS = 120000;
 static const uint32_t OCCUPANCY_WAIT_MS = 9000;
+static const uint32_t FACE_CHECK_WAIT_MS = 180000;
 static const uint8_t OCCUPANCY_MAX_ATTEMPTS = 3;
 static const uint8_t OCCUPANCY_CONFIRM_REPORTS = 3;
 static const uint8_t RIDER_LIMIT = 16;
@@ -210,12 +211,14 @@ enum RidePhase {
   RIDE_NONE,
   RIDE_BOARDING,
   RIDE_COUNTING,
-  RIDE_CLEARED
+  RIDE_CLEARED,
+  RIDE_VERIFYING
 };
 
 static void publishStatus();
 static void publishBoarding();
 static void resetRide();
+static void restartCount();
 static bool rideActive();
 static void beginDoorMotion(bool opening);
 static void armDoorHold(uint32_t now);
@@ -319,6 +322,7 @@ static bool boardingHold = false;
 static bool riderAwaitingFloor = false;
 static uint32_t holdStartedAt = 0;
 static uint32_t countRequestedAt = 0;
+static uint32_t faceCheckStartedAt = 0;
 static bool countReported = false;
 static const char *rideFault = "none";
 static uint32_t rideFaultSeq = 0;
@@ -753,7 +757,7 @@ static void clearGrant() {
 }
 
 static bool rideActive() {
-  return ridePhase == RIDE_BOARDING || ridePhase == RIDE_COUNTING;
+  return ridePhase == RIDE_BOARDING || ridePhase == RIDE_VERIFYING || ridePhase == RIDE_COUNTING;
 }
 
 static void resetRide() {
@@ -768,6 +772,7 @@ static void resetRide() {
   riderAwaitingFloor = false;
   holdStartedAt = 0;
   countRequestedAt = 0;
+  faceCheckStartedAt = 0;
   countReported = false;
 }
 
@@ -796,16 +801,12 @@ static void serviceDoor() {
 
     if (!opening) {
       if (ridePhase == RIDE_BOARDING) {
-        ridePhase = RIDE_COUNTING;
-        observedRiders = 0;
-        peakRiders = 0;
-        lastReportedRiders = 0xFF;
-        occupancyStreak = 0;
-        countRequestedAt = now;
-        countReported = false;
+        ridePhase = RIDE_VERIFYING;
+        faceCheckStartedAt = now;
         rideFault = "none";
-        Serial.print("[ride] door closed, counting occupants, expecting ");
-        Serial.println((unsigned)expectedRiders);
+        Serial.print("[ride] door closed, waiting for face verification of ");
+        Serial.print((unsigned)expectedRiders);
+        Serial.println(" rider(s)");
         publishBoarding();
         publishStatus();
         return;
@@ -994,6 +995,9 @@ static const char *captionText() {
   if (emergencyActive) {
     return "EMERGENCY";
   }
+  if (ridePhase == RIDE_VERIFYING) {
+    return "FACE CHECK";
+  }
   if (ridePhase == RIDE_COUNTING) {
     return "CHECKING CAR";
   }
@@ -1177,6 +1181,10 @@ static uint32_t rideDeadlineMs() {
     uint32_t elapsed = millis() - holdStartedAt;
     return elapsed >= DOOR_HOLD_CAP_MS ? 0 : DOOR_HOLD_CAP_MS - elapsed;
   }
+  if (ridePhase == RIDE_VERIFYING) {
+    uint32_t elapsed = millis() - faceCheckStartedAt;
+    return elapsed >= FACE_CHECK_WAIT_MS ? 0 : FACE_CHECK_WAIT_MS - elapsed;
+  }
   if (ridePhase == RIDE_COUNTING) {
     uint32_t elapsed = millis() - countRequestedAt;
     return elapsed >= OCCUPANCY_WAIT_MS ? 0 : OCCUPANCY_WAIT_MS - elapsed;
@@ -1330,6 +1338,9 @@ static String statusPayload() {
 static const char *ridePhaseName() {
   if (ridePhase == RIDE_BOARDING) {
     return "boarding";
+  }
+  if (ridePhase == RIDE_VERIFYING) {
+    return "verifying";
   }
   if (ridePhase == RIDE_COUNTING) {
     return "counting";
@@ -1640,7 +1651,8 @@ static void failOccupancy(const char *fault) {
 
   rideFault = fault;
   rideFaultSeq++;
-  reopenForBoarding();
+  Serial.println("[ride] door stays closed, counting again");
+  restartCount();
 }
 
 static void releaseRide() {
@@ -1659,6 +1671,51 @@ static void releaseRide() {
   publishBoarding();
   publishStatus();
   startDispatch();
+}
+
+static void restartCount() {
+  observedRiders = 0;
+  peakRiders = 0;
+  lastReportedRiders = 0xFF;
+  occupancyStreak = 0;
+  countRequestedAt = millis();
+  countReported = false;
+  displayDirty = true;
+  publishBoarding();
+  publishStatus();
+}
+
+static void beginCounting() {
+  ridePhase = RIDE_COUNTING;
+  rideFault = "none";
+  Serial.print("[ride] faces verified, counting occupants, expecting ");
+  Serial.println((unsigned)expectedRiders);
+  restartCount();
+}
+
+static void failFaceCheck() {
+  startTone(CHECK_FAILED_TONE, CHECK_FAILED_TONE_STEPS, false);
+  cancelRide("face_failed");
+  Serial.println("[ride] face verification failed, session cancelled, door reopened");
+}
+
+static void processVerify(const String &body) {
+  ackAction = "verify";
+
+  if (ridePhase != RIDE_VERIFYING) {
+    ackOk = false;
+    ackError = "not_verifying";
+    return;
+  }
+
+  ackOk = true;
+  ackError = "none";
+
+  if (extractJsonInt(body, "passed", 0) == 1) {
+    beginCounting();
+  } else {
+    failFaceCheck();
+  }
 }
 
 static void processOccupancy(const String &body) {
@@ -1754,6 +1811,8 @@ static void processCommand(const String &body) {
 
   if (strcmp(action, "grant") == 0) {
     processGrant(body);
+  } else if (strcmp(action, "verify") == 0) {
+    processVerify(body);
   } else if (strcmp(action, "occupancy") == 0) {
     processOccupancy(body);
   } else if (strcmp(action, "reset") == 0) {
@@ -2191,8 +2250,8 @@ static void onDoorButton() {
     return;
   }
 
-  if (ridePhase == RIDE_COUNTING) {
-    Serial.println("[ride] count interrupted at the door button, reopening");
+  if (ridePhase == RIDE_VERIFYING || ridePhase == RIDE_COUNTING) {
+    Serial.println("[ride] check interrupted at the door button, reopening");
     rideFault = "none";
     reopenForBoarding();
     return;
@@ -2398,6 +2457,12 @@ static void serviceRide(uint32_t now) {
     rideFaultSeq++;
     beginDoorMotion(false);
     publishBoarding();
+    return;
+  }
+
+  if (ridePhase == RIDE_VERIFYING && now - faceCheckStartedAt >= FACE_CHECK_WAIT_MS) {
+    Serial.println("[ride] face verification timed out");
+    failFaceCheck();
     return;
   }
 

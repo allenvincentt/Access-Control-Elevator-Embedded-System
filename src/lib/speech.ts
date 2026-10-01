@@ -42,8 +42,8 @@ export function announceOccupancyMismatch(expected: number, observed: number): v
     const extra = observed - expected;
     speak(
       extra === 1
-        ? 'There is one more person than verified. Please step out, then close the door again.'
-        : `There are ${extra} more people than verified. Please step out, then close the door again.`,
+        ? 'There is one more person than verified. Counting again.'
+        : `There are ${extra} more people than verified. Counting again.`,
     );
     return;
   }
@@ -51,13 +51,13 @@ export function announceOccupancyMismatch(expected: number, observed: number): v
   const missing = Math.max(1, expected - observed);
   speak(
     missing === 1
-      ? 'One verified person is missing. Please step in, then close the door again.'
-      : `${missing} verified people are missing. Please step in, then close the door again.`,
+      ? 'One verified person is missing. Counting again.'
+      : `${missing} verified people are missing. Counting again.`,
   );
 }
 
 export function announceDetectorOffline(): void {
-  speak('The occupancy detector is offline. The door is opening again.');
+  speak('The occupancy detector is offline. Counting again.');
 }
 
 export function announceRideCancelled(): void {
@@ -70,6 +70,14 @@ export function announcePickFloor(): void {
 
 export function announceWrongFloor(): void {
   speak('Wrong floor. This ride is locked to another floor. Please step out.');
+}
+
+export function announceFaceCheck(): void {
+  speak('Door closed. Each rider, please face the camera to confirm your identity.');
+}
+
+export function announceFaceFailed(): void {
+  speak('Face verification failed. The ride is cancelled and the door is opening.');
 }
 
 export function announceHoldExpired(): void {
