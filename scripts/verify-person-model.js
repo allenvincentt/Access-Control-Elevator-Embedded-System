@@ -63,10 +63,6 @@ function describeTensor(data, reader, tensorsStart, index) {
   return { shape, dtype: TENSOR_TYPES[code] ?? `type#${code}` };
 }
 
-function elementCount(shape) {
-  return shape.reduce((total, value) => total * (value > 0 ? value : 1), 1);
-}
-
 function inspect(modelPath) {
   const data = fs.readFileSync(modelPath);
 
@@ -131,15 +127,11 @@ function inspect(modelPath) {
       );
     }
 
-    if (dtype !== 'uint8' && dtype !== 'int8' && dtype !== 'float32') {
-      problems.push(`input dtype is ${dtype}, expected uint8, int8 or float32`);
+    if (dtype !== 'float32') {
+      problems.push(`input dtype is ${dtype}, expected float32`);
     }
   }
 
-  let boxes = -1;
-  let count = -1;
-  const pair = [];
-  let undeclared = 0;
   const described = [];
 
   for (let i = 0; i < outputs.count; i += 1) {
@@ -147,16 +139,6 @@ function inspect(modelPath) {
     const { shape, dtype } = describeTensor(data, reader, tensors.start, index);
     described.push({ shape, dtype });
     console.log(`output ${i}: [${shape}] ${dtype}`);
-
-    if (shape.length === 0) {
-      undeclared += 1;
-    } else if (shape.length === 3 && shape[shape.length - 1] === 4) {
-      boxes = i;
-    } else if (elementCount(shape) === 1) {
-      count = i;
-    } else if (shape.length === 2) {
-      pair.push(i);
-    }
   }
 
   if (described.length === 1 && described[0].shape.length === 3) {
@@ -167,44 +149,16 @@ function inspect(modelPath) {
     if (channels >= 5 && anchors > 0) {
       console.log('');
       console.log(
-        `path:  yolo (${channels === 5 ? 'head detector' : 'person detector, class 0'}), ${channels - 4} class(es), ${anchors} candidates, ${channelsFirst ? 'channels-first' : 'channels-last'}`,
+        `path:  yolo (${channels === 5 ? 'overhead person detector' : 'multi-class, person = class 0'}), ${channels - 4} class(es), ${anchors} candidates, ${channelsFirst ? 'channels-first' : 'channels-last'}`,
       );
       if (described[0].dtype !== 'float32') {
-        problems.push(
-          `YOLO output is ${described[0].dtype}; export with float32 outputs (float16 or int8 weights are fine)`,
-        );
+        problems.push(`YOLO output is ${described[0].dtype}; export with float32 input and output`);
       }
       return problems;
     }
   }
 
-  if (boxes >= 0 && count >= 0 && pair.length === 2) {
-    console.log('');
-    console.log('path:  ssd (person detector)');
-    console.log(`plan:  boxes=${boxes} count=${count} scores/classes=${pair[0]},${pair[1]}`);
-    return problems;
-  }
-
-  if (undeclared === 4 && outputs.count === 4) {
-    console.log('');
-    console.log('path:  ssd (person detector)');
-    console.log('note:  all four output shapes are dynamic, which is the normal signature for');
-    console.log('       TFLite_Detection_PostProcess. They resolve when the interpreter');
-    console.log('       allocates tensors, and the loader falls back to the conventional');
-    console.log('       order: boxes=0 classes=1 scores=2 count=3.');
-    return problems;
-  }
-
-  if (boxes < 0) {
-    problems.push('no [1, N, 4] box tensor found, and the outputs are not the 4 dynamic tensors of TFLite_Detection_PostProcess');
-  }
-  if (count < 0) {
-    problems.push('no scalar detection-count tensor found');
-  }
-  if (pair.length !== 2) {
-    problems.push(`found ${pair.length} [1, N] tensors, expected exactly 2 (scores and classes)`);
-  }
-
+  problems.push('expected one YOLO output tensor shaped [1, 4+classes, N]; SSD models are no longer supported');
   return problems;
 }
 
@@ -225,7 +179,7 @@ function main() {
 
   console.log('');
   if (problems.length === 0) {
-    console.log('PASS: matches the contract in src/services/person/model.ts');
+    console.log('PASS: matches the contract in src/services/overhead/model.ts');
     return 0;
   }
 

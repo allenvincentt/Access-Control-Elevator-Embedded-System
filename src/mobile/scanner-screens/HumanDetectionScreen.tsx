@@ -8,13 +8,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import Animated, {
-  Easing,
-  useAnimatedProps,
-  useSharedValue,
-  withTiming,
-} from "react-native-reanimated";
-import Svg, { Rect } from "react-native-svg";
+import Svg, { Circle, Rect } from "react-native-svg";
 
 import { useSnackbar } from "@/components/common/Snackbar";
 import { HintRow } from "@/components/HintRow";
@@ -35,51 +29,57 @@ import { useRideSession } from "@/hooks/useRideSession";
 import { errorMessage } from "@/lib/errors";
 import { reportOccupancy } from "@/services/elevatorService";
 import {
-  PERSON_DETECTION,
-  PERSON_MODEL_FAILURE_MESSAGES,
-  PERSON_ROI_OVERHEAD,
-} from "@/services/person/constants";
+  OVERHEAD_CAMERA,
+  OVERHEAD_MODEL_FAILURES,
+  OVERHEAD_MODEL_NAME,
+} from "@/services/overhead/constants";
 import {
+  CountSmoother,
+  StableCounter,
+  UniqueCounter,
+} from "@/services/overhead/counter";
+import {
+  deleteFrame,
   detectPeople,
-  discardFile,
-  type DetectionStats,
-} from "@/services/person/detector";
+  type CameraFrame,
+} from "@/services/overhead/detector";
 import {
-  warmUpPersonModel,
-  type PersonModelState,
-} from "@/services/person/model";
-import {
-  PersonTracker,
-  type PersonTrack,
-  type TrackedCount,
-} from "@/services/person/tracker";
+  warmUpOverheadModel,
+  type OverheadModelState,
+} from "@/services/overhead/model";
+import { ByteTracker, type TrackedPerson } from "@/services/overhead/tracker";
 import { refreshBoarding, watchBoardingOnly } from "@/services/rideSession";
 
 export type HumanDetectionScreenProps = {
   onExit: () => void;
 };
 
-type Frame = {
-  uri: string;
-  width: number;
-  height: number;
+type Reading = {
+  people: number;
+  raw: number;
+  unique: number;
+  fps: number;
+  stable: boolean;
+  persons: TrackedPerson[];
+  source: { width: number; height: number };
 };
 
-type OverlayBox = {
+type DrawnBox = {
   id: number;
+  label: string;
+  color: string;
   x: number;
   y: number;
   width: number;
   height: number;
-  counted: boolean;
 };
 
 const DANGER = "#FF6B60";
 const SUCCESS = "#4ADE80";
 const WARNING = "#FBBF24";
 const PANEL_MAX_WIDTH = 380;
-
-const AnimatedRect = Animated.createAnimatedComponent(Rect);
+const LABEL_HEIGHT = 18;
+const INK = "rgb(20,20,20)";
 
 export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
   const snackbar = useSnackbar();
@@ -91,33 +91,37 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
 
   const cameraRef = useRef<CameraView>(null);
   const mounted = useRef(true);
-  const tracker = useRef(new PersonTracker());
+  const tracker = useRef(new ByteTracker());
+  const smoother = useRef(new CountSmoother());
+  const unique = useRef(new UniqueCounter());
+  const steadiness = useRef(new StableCounter());
+  const fpsRef = useRef(0);
+  const lastFrameAt = useRef(0);
   const phaseRef = useRef<string>("idle");
   const attemptRef = useRef(0);
   const faultSeqRef = useRef(0);
-  const trackingRef = useRef(false);
   const reportedKey = useRef<string | null>(null);
   const reportedAt = useRef(0);
-  const detectorMisses = useRef(0);
-  const lastFrameAt = useRef(0);
+  const misses = useRef(0);
 
   const [cameraReady, setCameraReady] = useState(false);
   const [appActive, setAppActive] = useState(true);
   const [landscape, setLandscape] = useState(false);
-  const [model, setModel] = useState<PersonModelState | null>(null);
-  const [glideMs, setGlideMs] = useState<number>(
-    PERSON_DETECTION.boxGlideMinMs,
-  );
-  const [stats, setStats] = useState<DetectionStats | null>(null);
-  const [frameMs, setFrameMs] = useState(0);
-  const [tracked, setTracked] = useState<TrackedCount | null>(null);
-  const [source, setSource] = useState<{
-    width: number;
-    height: number;
-  } | null>(null);
+  const [model, setModel] = useState<OverheadModelState | null>(null);
+  const [reading, setReading] = useState<Reading | null>(null);
   const [fault, setFault] = useState<string | null>(null);
 
   useRideNarration(boarding, true);
+
+  const resetCounting = useCallback(() => {
+    tracker.current.reset();
+    smoother.current.reset();
+    unique.current.reset();
+    steadiness.current.reset();
+    fpsRef.current = 0;
+    lastFrameAt.current = 0;
+    reportedKey.current = null;
+  }, []);
 
   useEffect(() => {
     phaseRef.current = boarding?.phase ?? "idle";
@@ -127,7 +131,7 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
 
   useEffect(() => {
     mounted.current = true;
-    warmUpPersonModel().then((state) => {
+    warmUpOverheadModel().then((state) => {
       if (mounted.current) setModel(state);
     });
     return () => {
@@ -158,17 +162,17 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (state) => {
       setAppActive(state === "active");
-      if (state !== "active") tracker.current.reset();
+      if (state !== "active") resetCounting();
     });
     return () => subscription.remove();
-  }, []);
+  }, [resetCounting]);
 
-  const capture = useCallback(async (): Promise<Frame | null> => {
+  const capture = useCallback(async (): Promise<CameraFrame | null> => {
     const camera = cameraRef.current;
     if (!camera) return null;
     try {
       const photo = await camera.takePictureAsync({
-        quality: PERSON_DETECTION.frameQuality,
+        quality: OVERHEAD_CAMERA.frameQuality,
         skipProcessing: false,
         shutterSound: false,
         exif: false,
@@ -189,6 +193,7 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
 
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let wasCounting = false;
     lastFrameAt.current = 0;
 
     const wait = (ms: number) =>
@@ -200,17 +205,12 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
       while (!cancelled) {
         const counting = phaseRef.current === "counting";
         const interval = counting
-          ? PERSON_DETECTION.pollIntervalMs
-          : PERSON_DETECTION.idlePollIntervalMs;
+          ? OVERHEAD_CAMERA.pollIntervalMs
+          : OVERHEAD_CAMERA.idlePollIntervalMs;
 
-        if (counting !== trackingRef.current) {
-          trackingRef.current = counting;
+        if (counting !== wasCounting) {
+          wasCounting = counting;
           reportedKey.current = null;
-          if (counting) {
-            tracker.current.keepLive();
-          } else {
-            tracker.current.reset();
-          }
         }
 
         const frame = await capture();
@@ -220,70 +220,70 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
           continue;
         }
 
-        setSource({ width: frame.width, height: frame.height });
-
-        let outcome;
+        let result;
         try {
-          outcome = await detectPeople(frame, PERSON_ROI_OVERHEAD);
+          result = await detectPeople(frame);
         } catch (error) {
-          discardFile(frame.uri);
+          deleteFrame(frame.uri);
           if (!cancelled && mounted.current) {
-            setFault(errorMessage(error, "Person detection failed."));
+            setFault(errorMessage(error, "Human detection failed."));
           }
           break;
         }
-        discardFile(frame.uri);
+        deleteFrame(frame.uri);
         if (cancelled || !mounted.current) break;
 
-        if (!outcome.ok) {
-          detectorMisses.current += 1;
-          if (detectorMisses.current >= PERSON_DETECTION.detectorFailureLimit) {
+        if (!result.ok) {
+          misses.current += 1;
+          if (misses.current >= OVERHEAD_CAMERA.failureLimit) {
             setFault("The camera could not produce a usable frame.");
             break;
           }
           await wait(interval);
           continue;
         }
+        misses.current = 0;
 
-        detectorMisses.current = 0;
-        const next = tracker.current.push(outcome.boxes, outcome.stats.kind);
+        const persons = tracker.current.update(result.detections);
+        const people = smoother.current.update(persons.length);
+        unique.current.update(persons);
+        const stable = steadiness.current.update(people);
+
         const now = Date.now();
-        const gap =
-          lastFrameAt.current > 0
-            ? now - lastFrameAt.current
-            : PERSON_DETECTION.boxGlideMinMs;
+        if (lastFrameAt.current > 0) {
+          const instant = 1000 / Math.max(now - lastFrameAt.current, 1);
+          fpsRef.current = 0.9 * fpsRef.current + 0.1 * instant;
+        }
         lastFrameAt.current = now;
-        setFrameMs(gap);
-        setGlideMs(
-          Math.min(
-            PERSON_DETECTION.boxGlideMaxMs,
-            Math.max(PERSON_DETECTION.boxGlideMinMs, gap),
-          ),
-        );
-        setStats(outcome.stats);
-        setTracked(next);
+
+        setReading({
+          people,
+          raw: persons.length,
+          unique: unique.current.total,
+          fps: fpsRef.current,
+          stable,
+          persons,
+          source: { width: frame.width, height: frame.height },
+        });
 
         if (!counting) {
           await wait(interval);
           continue;
         }
 
-        const key = `${attemptRef.current}-${faultSeqRef.current}-${next.count}`;
+        const key = `${attemptRef.current}-${faultSeqRef.current}-${people}`;
         const stale =
-          Date.now() - reportedAt.current >= PERSON_DETECTION.reportRetryMs;
-        const worthReporting = next.count > 0 || next.stable;
-        if (worthReporting && (reportedKey.current !== key || stale)) {
+          Date.now() - reportedAt.current >= OVERHEAD_CAMERA.reportRetryMs;
+        if ((people > 0 || stable) && (reportedKey.current !== key || stale)) {
           reportedKey.current = key;
           reportedAt.current = Date.now();
           try {
-            await reportOccupancy(next.count);
+            await reportOccupancy(people);
           } catch (error) {
             if (mounted.current) {
               snackbar.show(
                 errorMessage(error, "The count could not be sent."),
-                {
-                  variant: "error",
-                },
+                { variant: "error" },
               );
             }
           }
@@ -303,20 +303,14 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
 
   const counting = boarding?.phase === "counting";
   const expected = boarding?.expected ?? 0;
-  const observed = tracked?.count ?? 0;
+  const observed = reading?.people ?? 0;
   const matches = counting && observed === expected;
-
-  const overlay = buildOverlay(
-    tracked?.visible ?? [],
-    source,
-    viewWidth,
-    viewHeight,
-  );
+  const boxes = layoutBoxes(reading, viewWidth, viewHeight);
   const wide = viewWidth > viewHeight;
   const compact = !fault && !linkFault;
 
   if (model && !model.ready) {
-    const copy = PERSON_MODEL_FAILURE_MESSAGES[model.failure];
+    const copy = OVERHEAD_MODEL_FAILURES[model.failure];
     return (
       <ScannerScaffold
         step="Human detector"
@@ -369,36 +363,56 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
               facing="back"
               active={appActive}
               animateShutter={false}
-              pictureSize={PERSON_DETECTION.pictureSize}
+              pictureSize={OVERHEAD_CAMERA.pictureSize}
               onCameraReady={() => setCameraReady(true)}
             />
             <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
-              <Rect
-                x={PERSON_ROI_OVERHEAD.left * viewWidth}
-                y={PERSON_ROI_OVERHEAD.top * viewHeight}
-                width={
-                  (PERSON_ROI_OVERHEAD.right - PERSON_ROI_OVERHEAD.left) * viewWidth
-                }
-                height={
-                  (PERSON_ROI_OVERHEAD.bottom - PERSON_ROI_OVERHEAD.top) * viewHeight
-                }
-                fill="none"
-                stroke="rgba(255,255,255,0.45)"
-                strokeWidth={2}
-                strokeDasharray="10 8"
-                rx={radius.lg}
-              />
-              {overlay.map((box) => (
-                <TrackBox key={box.id} box={box} glideMs={glideMs} />
+              {boxes.map((box) => (
+                <Rect
+                  key={`box-${box.id}`}
+                  x={box.x}
+                  y={box.y}
+                  width={box.width}
+                  height={box.height}
+                  fill="none"
+                  stroke={box.color}
+                  strokeWidth={2}
+                />
+              ))}
+              {boxes.map((box) => (
+                <Circle
+                  key={`dot-${box.id}`}
+                  cx={box.x + box.width / 2}
+                  cy={box.y + box.height / 2}
+                  r={4}
+                  fill={box.color}
+                />
               ))}
             </Svg>
-            {PERSON_DETECTION.showDiagnostics && stats ? (
-              <View style={styles.diagnostics} pointerEvents="none">
-                <Text style={styles.diagnosticsText}>
-                  {`model ${stats.reported}/${stats.scanned}  gate ${stats.decoded}  merged ${stats.merged}  in view ${stats.accepted}  counted ${observed}`}
+            {boxes.map((box) => (
+              <View
+                key={`label-${box.id}`}
+                pointerEvents="none"
+                style={[
+                  styles.label,
+                  {
+                    left: box.x,
+                    top: Math.max(0, box.y - LABEL_HEIGHT),
+                    backgroundColor: box.color,
+                  },
+                ]}
+              >
+                <Text style={styles.labelText}>{box.label}</Text>
+              </View>
+            ))}
+            {reading ? (
+              <View style={styles.stats} pointerEvents="none">
+                <Text style={styles.statsText}>{`People: ${reading.people}`}</Text>
+                <Text style={styles.statsText}>
+                  {`Raw: ${reading.raw}  Unique: ${reading.unique}`}
                 </Text>
-                <Text style={styles.diagnosticsText}>
-                  {`${stats.kind} ${stats.target} · best ${stats.topScore.toFixed(2)} · new ${stats.minScore.toFixed(2)} · keep ${stats.sustainScore.toFixed(2)} · ${frameMs} ms/frame`}
+                <Text style={styles.statsText}>
+                  {`FPS: ${reading.fps.toFixed(1)}  Model: ${OVERHEAD_MODEL_NAME}`}
                 </Text>
               </View>
             ) : null}
@@ -425,8 +439,9 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
                 label="Retry"
                 icon="refresh"
                 onPress={() => {
-                  detectorMisses.current = 0;
-                  tracker.current.reset();
+                  misses.current = 0;
+                  resetCounting();
+                  setReading(null);
                   setFault(null);
                   void refreshBoarding();
                 }}
@@ -458,7 +473,7 @@ export function HumanDetectionScreen({ onExit }: HumanDetectionScreenProps) {
                 </Text>
               </Text>
               <Text style={styles.compactText}>
-                {tracked?.stable
+                {reading?.stable
                   ? "Count is steady and has been sent to the controller."
                   : "Holding until the count is steady…"}
               </Text>
@@ -534,59 +549,33 @@ function PanelHead({
   );
 }
 
-function TrackBox({ box, glideMs }: { box: OverlayBox; glideMs: number }) {
-  const x = useSharedValue(box.x);
-  const y = useSharedValue(box.y);
-  const width = useSharedValue(box.width);
-  const height = useSharedValue(box.height);
-
-  useEffect(() => {
-    const timing = { duration: glideMs, easing: Easing.linear };
-    x.value = withTiming(box.x, timing);
-    y.value = withTiming(box.y, timing);
-    width.value = withTiming(box.width, timing);
-    height.value = withTiming(box.height, timing);
-  }, [box.x, box.y, box.width, box.height, glideMs, x, y, width, height]);
-
-  const animatedProps = useAnimatedProps(() => ({
-    x: x.value,
-    y: y.value,
-    width: width.value,
-    height: height.value,
-  }));
-
-  return (
-    <AnimatedRect
-      animatedProps={animatedProps}
-      fill="none"
-      stroke={box.counted ? SUCCESS : "rgba(255,255,255,0.55)"}
-      strokeWidth={box.counted ? 3 : 2}
-      rx={radius.sm}
-    />
-  );
+function trackColor(id: number): string {
+  return `rgb(${(id * 151) % 255},${(id * 91) % 255},${(id * 47) % 255})`;
 }
 
-function buildOverlay(
-  tracks: PersonTrack[],
-  source: { width: number; height: number } | null,
+function layoutBoxes(
+  reading: Reading | null,
   viewWidth: number,
   viewHeight: number,
-): OverlayBox[] {
-  if (!source || source.width <= 0 || source.height <= 0) return [];
+): DrawnBox[] {
+  if (!reading) return [];
+  const { width, height } = reading.source;
+  if (width <= 0 || height <= 0) return [];
 
-  const scale = Math.max(viewWidth / source.width, viewHeight / source.height);
-  const renderedWidth = source.width * scale;
-  const renderedHeight = source.height * scale;
-  const offsetX = (viewWidth - renderedWidth) / 2;
-  const offsetY = (viewHeight - renderedHeight) / 2;
+  const scale = Math.max(viewWidth / width, viewHeight / height);
+  const shownWidth = width * scale;
+  const shownHeight = height * scale;
+  const offsetX = (viewWidth - shownWidth) / 2;
+  const offsetY = (viewHeight - shownHeight) / 2;
 
-  return tracks.map(({ id, view, confirmed }) => ({
+  return reading.persons.map(({ id, box, score }) => ({
     id,
-    x: offsetX + view.left * renderedWidth,
-    y: offsetY + view.top * renderedHeight,
-    width: Math.max(1, (view.right - view.left) * renderedWidth),
-    height: Math.max(1, (view.bottom - view.top) * renderedHeight),
-    counted: confirmed,
+    label: `#${id} ${score.toFixed(2)}`,
+    color: trackColor(id),
+    x: offsetX + box.left * shownWidth,
+    y: offsetY + box.top * shownHeight,
+    width: Math.max(1, (box.right - box.left) * shownWidth),
+    height: Math.max(1, (box.bottom - box.top) * shownHeight),
   }));
 }
 
@@ -640,19 +629,30 @@ const styles = StyleSheet.create({
     color: colors.text,
     ...typography.subheading,
   },
-  diagnostics: {
+  label: {
+    position: "absolute",
+    height: LABEL_HEIGHT,
+    paddingHorizontal: 4,
+    justifyContent: "center",
+  },
+  labelText: {
+    color: INK,
+    fontSize: 12,
+    fontVariant: ["tabular-nums"],
+  },
+  stats: {
     position: "absolute",
     left: spacing.base,
     bottom: spacing.base,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.sm,
-    borderRadius: radius.sm,
-    backgroundColor: "rgba(0,0,0,0.55)",
-    gap: 2,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: 10,
+    backgroundColor: "rgba(20,20,20,0.6)",
+    gap: 4,
   },
-  diagnosticsText: {
-    color: "rgba(255,255,255,0.85)",
-    fontSize: 11,
+  statsText: {
+    color: palette.white,
+    fontSize: 15,
+    fontWeight: "700",
     fontVariant: ["tabular-nums"],
   },
 });
